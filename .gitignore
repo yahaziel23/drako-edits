@@ -150,3 +150,9 @@ output/**/*.mp4
 output/**/*.avi
 output/**/*.mov
 output/**/*.mkv
+
+# =============================================================================
+# YouTube API - Credenciales (NUNCA subir al repo)
+# =============================================================================
+client_secrets.json
+token.json
