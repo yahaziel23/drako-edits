@@ -14,7 +14,14 @@ Uso:
 import json
 import subprocess
 import argparse
+import sys
+import io
 from pathlib import Path
+
+# Fix para emojis en Windows
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8', errors='replace')
 
 
 # =============================================================================
@@ -74,21 +81,21 @@ def download_clip(url, filename):
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        print(f"   \u274c Error: {result.stderr[:200]}")
+        print(f"   [X] Error: {result.stderr[:200]}")
         return None
 
     if output_path.exists():
         size_mb = output_path.stat().st_size / (1024 * 1024)
-        print(f"   \u2705 Descargado: {filename} ({size_mb:.1f} MB)")
+        print(f"   [OK] Descargado: {filename} ({size_mb:.1f} MB)")
         return filename
     else:
-        print(f"   \u274c No se descargo el archivo")
+        print(f"   [X] No se descargo el archivo")
         return None
 
 
 def show_tag_suggestions():
     """Muestra las sugerencias de tags."""
-    print("\n   \ud83c\udff7\ufe0f  Tags sugeridos (puedes usar estos o inventar los tuyos):")
+    print("\n   TAGS sugeridos (puedes usar estos o inventar los tuyos):")
     print("   " + "-" * 50)
     for categoria, tags in TAGS_SUGERIDOS.items():
         print(f"   {categoria:12s}: {', '.join(tags)}")
@@ -106,18 +113,18 @@ def interactive_catalog():
     print(f"   Clips en catalogo: {len(index)}")
 
     # 1. Pedir URL
-    print("\n\u2501\u2501\u2501 PASO 1: Link del Short \u2501\u2501\u2501")
+    print("\n--- PASO 1: Link del Short ---")
     url = input("\n   Pega el link del YouTube Short: ").strip()
     if not url:
-        print("   \u274c No pusiste link. Saliendo.")
+        print("   [X] No pusiste link. Saliendo.")
         return
 
     # 2. Pedir nombre del archivo
-    print("\n\u2501\u2501\u2501 PASO 2: Nombre del archivo \u2501\u2501\u2501")
+    print("\n--- PASO 2: Nombre del archivo ---")
     print("   (sin extension, usa guion_bajo, ej: jim_carrey_typing)")
     filename = input("   Nombre: ").strip()
     if not filename:
-        print("   \u274c No pusiste nombre. Saliendo.")
+        print("   [X] No pusiste nombre. Saliendo.")
         return
     if not filename.endswith(".mp4"):
         filename += ".mp4"
@@ -125,29 +132,29 @@ def interactive_catalog():
     # Verificar si ya existe
     existing_files = {entry["file"] for entry in index}
     if filename in existing_files:
-        print(f"   \u26a0\ufe0f  '{filename}' ya existe en el catalogo. Se actualizara.")
+        print(f"   [!] '{filename}' ya existe en el catalogo. Se actualizara.")
 
     # 3. Descargar
-    print("\n\u2501\u2501\u2501 PASO 3: Descargando \u2501\u2501\u2501")
+    print("\n--- PASO 3: Descargando ---")
     downloaded = download_clip(url, filename)
     if not downloaded:
-        cont = input("   \u00bfContinuar catalogando sin descarga? (s/n): ").strip().lower()
+        cont = input("   Continuar catalogando sin descarga? (s/n): ").strip().lower()
         if cont != 's':
             return
 
     # 4. Tags
-    print("\n\u2501\u2501\u2501 PASO 4: Tags \u2501\u2501\u2501")
+    print("\n--- PASO 4: Tags ---")
     show_tag_suggestions()
-    print("\n   \u00bfQue describe este clip? (separados por coma)")
+    print("\n   Que describe este clip? (separados por coma)")
     print("   Ejemplo: escribir, rapido, genio, epico")
     tags_input = input("   Tags: ").strip()
     tags = [t.strip().lower() for t in tags_input.split(",") if t.strip()]
     if not tags:
-        print("   \u26a0\ufe0f  Sin tags, usando 'sin-categoria'")
+        print("   [!] Sin tags, usando 'sin-categoria'")
         tags = ["sin-categoria"]
 
     # 5. Captions
-    print("\n\u2501\u2501\u2501 PASO 5: Captions \u2501\u2501\u2501")
+    print("\n--- PASO 5: Captions ---")
     print("   Escribe captions que funcionen con este clip.")
     print("   (uno por linea, ENTER vacio para terminar)")
     print("")
@@ -165,10 +172,10 @@ def interactive_catalog():
         captions.append(caption)
 
     if not captions:
-        print("   \u26a0\ufe0f  Sin captions por ahora (puedes agregarlos despues).")
+        print("   [!] Sin captions por ahora (puedes agregarlos despues).")
 
     # 6. Descripcion rapida (opcional)
-    print("\n\u2501\u2501\u2501 PASO 6: Descripcion (opcional) \u2501\u2501\u2501")
+    print("\n--- PASO 6: Descripcion (opcional) ---")
     print("   Una linea describiendo el clip (para que recuerdes que es)")
     print("   Ejemplo: 'Jim Carrey escribiendo rapido en Todo Poderoso'")
     description = input("   Descripcion: ").strip()
@@ -196,7 +203,7 @@ def interactive_catalog():
 
     # Resumen
     print(f"\n\n{'='*60}")
-    print(f"   \u2705 CLIP CATALOGADO")
+    print(f"   [OK] CLIP CATALOGADO")
     print(f"{'='*60}")
     print(f"   Archivo:     {filename}")
     print(f"   Tags:        {', '.join(tags)}")
@@ -206,7 +213,7 @@ def interactive_catalog():
     print(f"{'='*60}")
 
     # Preguntar si quiere agregar otro
-    otro = input("\n   \u00bfCatalogar otro clip? (s/n): ").strip().lower()
+    otro = input("\n   Catalogar otro clip? (s/n): ").strip().lower()
     if otro == 's':
         interactive_catalog()
 
