@@ -49,6 +49,9 @@ BEATS = [
     {"name": "beat_3", "start": 3.968, "end": 5.652, "text": "De color vas a cambiar...", "style": "centered"},
 ]
 
+# Duracion total del video (fin del ultimo beat)
+TOTAL_DURATION = BEATS[-1]["end"]  # 5.652s
+
 # Video config
 VIDEO_WIDTH = 1080
 VIDEO_HEIGHT = 1920
@@ -202,9 +205,8 @@ def generate_video(video_num, beat_1_imgs, beat_2_imgs, beat_3_imgs, font_path):
     img2 = resize_to_vertical(img2_path)
     img3 = resize_to_vertical(img3_path)
 
-    # 3. Cargar audio
-    audio_clip = AudioFileClip(str(AUDIO_PATH))
-    total_duration = audio_clip.duration
+    # 3. Cargar audio y cortar a la duracion exacta
+    audio_clip = AudioFileClip(str(AUDIO_PATH)).subclipped(0, TOTAL_DURATION)
 
     # 4. Crear clips de imagen por beat
     image_clips = []
@@ -243,7 +245,7 @@ def generate_video(video_num, beat_1_imgs, beat_2_imgs, beat_3_imgs, font_path):
     # 6. Componer video final
     all_clips = image_clips + subtitle_clips
     final = CompositeVideoClip(all_clips, size=(VIDEO_WIDTH, VIDEO_HEIGHT))
-    final = final.with_duration(total_duration).with_audio(audio_clip)
+    final = final.with_duration(TOTAL_DURATION).with_audio(audio_clip)
 
     # 7. Export
     output_path = OUTPUT_DIR / f"video_{video_num:03d}.mp4"
