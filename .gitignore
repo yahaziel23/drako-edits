@@ -80,51 +80,6 @@ target/
 profile_default/
 ipython_config.py
 
-# pyenv
-# .python-version
-
-# pipenv
-# Pipfile.lock
-
-# UV
-# uv.lock
-
-# poetry
-# poetry.lock
-# poetry.toml
-
-# pdm
-# pdm.lock
-# pdm.toml
-.pdm-python
-.pdm-build/
-
-# pixi
-.pixi
-
-# PEP 582
-__pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# Redis
-*.rdb
-*.aof
-*.pid
-
-# RabbitMQ
-mnesia/
-rabbitmq/
-rabbitmq-data/
-
-# ActiveMQ
-activemq-data/
-
-# SageMath parsed files
-*.sage.py
-
 # Environments
 .env
 .envrc
@@ -159,12 +114,6 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
-# PyCharm
-# .idea/
-
-# Abstra
-.abstra/
-
 # Visual Studio Code
 # .vscode/
 
@@ -177,17 +126,27 @@ tempCodeRunnerFile.py
 # PyPI configuration file
 .pypirc
 
-# Marimo
-marimo/_static/
-marimo/_lsp/
-__marimo__/
-
-# Streamlit
-.streamlit/secrets.toml
-
 # =============================================================================
-# DRAKO EDITS - Assets (imagenes, audio, videos generados)
-# No se suben al repo (pesados y regenerables)
+# DRAKO EDITS - Archivos pesados (imagenes, audio, videos)
+# Las CARPETAS si se trackean (via .gitkeep), los archivos pesados NO
 # =============================================================================
-assets/
-output/
+
+# Imagenes
+assets/**/*.jpg
+assets/**/*.jpeg
+assets/**/*.png
+assets/**/*.webp
+assets/**/*.bmp
+assets/**/*.gif
+
+# Audio
+assets/**/*.mp3
+assets/**/*.wav
+assets/**/*.m4a
+assets/**/*.ogg
+
+# Videos generados
+output/**/*.mp4
+output/**/*.avi
+output/**/*.mov
+output/**/*.mkv
