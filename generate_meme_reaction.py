@@ -3,7 +3,8 @@
 """
 Drako Edits - Generador de Meme Reaction Videos
 
-Formato: Imagen (meme) arriba + Caption (texto medio) + Video clip abajo + Audio
+Formato: Imagen (meme) arriba (70%) + Video clip abajo (30%)
+         Caption superpuesto en la frontera meme/video (opcional)
 Duracion: min(video, audio) o custom.
 
 Uso:
@@ -48,9 +49,20 @@ VIDEO_WIDTH = 1080
 VIDEO_HEIGHT = 1920
 FPS = 30
 
+# Layout proportions
+MEME_RATIO = 0.70   # Meme ocupa 70% del alto
+CLIP_RATIO = 0.30   # Video clip ocupa 30% del alto
+
 # Font config
-FONT_SIZE_CAPTION = 70
 STROKE_WIDTH = 4
+
+# Caption font size options
+CAPTION_SIZES = {
+    "S": 45,
+    "M": 65,
+    "L": 85,
+    "XL": 110,
+}
 
 
 # =============================================================================
@@ -88,32 +100,38 @@ def get_audio_duration(audio_path):
     return duration
 
 
-def resize_image_to_section(img_path, width, height):
-    """Redimensiona imagen para que quepa en la seccion superior."""
+def resize_image_fit(img_path, width, height):
+    """Redimensiona imagen para que quepa COMPLETA en la seccion (sin recortar).
+    
+    La imagen se escala para caber dentro del area manteniendo aspect ratio.
+    El espacio sobrante se rellena con negro.
+    """
     img = Image.open(img_path).convert("RGB")
-    target_ratio = width / height
-    img_ratio = img.width / img.height
-
-    if img_ratio > target_ratio:
-        new_h = height
-        new_w = int(new_h * img_ratio)
-    else:
-        new_w = width
-        new_h = int(new_w / img_ratio)
-
+    
+    # Calcular escala para que quepa completa (fit, no fill)
+    scale_w = width / img.width
+    scale_h = height / img.height
+    scale = min(scale_w, scale_h)  # El menor para que quepa toda
+    
+    new_w = int(img.width * scale)
+    new_h = int(img.height * scale)
     img = img.resize((new_w, new_h), Image.LANCZOS)
-    left = (new_w - width) // 2
-    top = (new_h - height) // 2
-    return img.crop((left, top, left + width, top + height))
+    
+    # Crear canvas negro y centrar la imagen
+    canvas = Image.new("RGB", (width, height), (0, 0, 0))
+    paste_x = (width - new_w) // 2
+    paste_y = (height - new_h) // 2
+    canvas.paste(img, (paste_x, paste_y))
+    
+    return canvas
 
 
-def render_caption(text, font_path, max_width=None):
-    """Renderiza el caption con word wrap."""
-    if max_width is None:
-        max_width = VIDEO_WIDTH - 40
+def render_caption(text, font_path, font_size):
+    """Renderiza el caption con word wrap, SIN background (transparente)."""
+    max_width = VIDEO_WIDTH - 40
 
     try:
-        font = ImageFont.truetype(font_path, FONT_SIZE_CAPTION) if font_path else ImageFont.load_default()
+        font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
     except Exception:
         font = ImageFont.load_default()
 
@@ -137,8 +155,8 @@ def render_caption(text, font_path, max_width=None):
     if current_line:
         lines.append(current_line)
 
-    # Renderizar
-    line_height = FONT_SIZE_CAPTION + 10
+    # Renderizar sobre fondo transparente (sin background)
+    line_height = font_size + 10
     total_height = line_height * len(lines) + 20
     img = Image.new("RGBA", (VIDEO_WIDTH, total_height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -166,24 +184,28 @@ def list_files(directory, extensions):
 # GENERADOR DE VIDEO
 # =============================================================================
 
-def generate_video(meme_path, caption_text, clip_path, audio_path, duration, output_name):
-    """Genera el video final con el formato meme reaction."""
+def generate_video(meme_path, caption_text, caption_font_size, clip_path, audio_path, duration, output_name):
+    """Genera el video final con el formato meme reaction.
+    
+    Layout:
+        - Meme arriba (70% del alto) - imagen completa sin recortar, fondo negro
+        - Video clip abajo (30% del alto)
+        - Caption (si existe) superpuesto en la frontera entre meme y video
+          (mitad sobre el meme, mitad sobre el video)
+    """
     print(f"\n   Generando video...")
 
     font_path = find_font()
 
-    # Calcular dimensiones de cada seccion
-    caption_img = render_caption(caption_text, font_path)
-    caption_h = caption_img.shape[0]
+    # Calcular dimensiones: 70% meme, 30% video clip
+    top_h = int(VIDEO_HEIGHT * MEME_RATIO)
+    bottom_h = VIDEO_HEIGHT - top_h
 
-    top_h = int((VIDEO_HEIGHT - caption_h) * 0.50)  # Mitad superior para meme
-    bottom_h = VIDEO_HEIGHT - top_h - caption_h      # Resto para video clip
-
-    # 1. Imagen meme (arriba)
-    meme_img = resize_image_to_section(meme_path, VIDEO_WIDTH, top_h)
+    # 1. Imagen meme (arriba) - FIT completo, sin recortar, fondo negro
+    meme_img = resize_image_fit(meme_path, VIDEO_WIDTH, top_h)
     meme_array = np.array(meme_img)
 
-    # 2. Video clip (abajo)
+    # 2. Video clip (abajo - 30%)
     video_clip = VideoFileClip(str(clip_path)).resized((VIDEO_WIDTH, bottom_h))
     if video_clip.duration > duration:
         video_clip = video_clip.subclipped(0, duration)
@@ -200,19 +222,24 @@ def generate_video(meme_path, caption_text, clip_path, audio_path, duration, out
     # Meme arriba
     meme_clip = ImageClip(meme_array).with_duration(duration).with_position((0, 0))
 
-    # Caption en el medio
-    caption_clip = ImageClip(caption_img, transparent=True).with_duration(duration)
-    caption_y = top_h
-    caption_clip = caption_clip.with_position((0, caption_y))
-
     # Video clip abajo
-    video_clip = video_clip.with_position((0, top_h + caption_h))
+    video_clip = video_clip.with_position((0, top_h))
+
+    # Layers
+    layers = [bg, meme_clip, video_clip]
+
+    # Caption superpuesto en la frontera (si hay texto)
+    if caption_text:
+        caption_img = render_caption(caption_text, font_path, caption_font_size)
+        caption_h = caption_img.shape[0]
+        # Centrar verticalmente en la frontera: mitad sobre meme, mitad sobre video
+        caption_y = top_h - (caption_h // 2)
+        caption_clip = ImageClip(caption_img, transparent=True).with_duration(duration)
+        caption_clip = caption_clip.with_position((0, caption_y))
+        layers.append(caption_clip)
 
     # Composicion final
-    final = CompositeVideoClip(
-        [bg, meme_clip, caption_clip, video_clip],
-        size=(VIDEO_WIDTH, VIDEO_HEIGHT)
-    )
+    final = CompositeVideoClip(layers, size=(VIDEO_WIDTH, VIDEO_HEIGHT))
     final = final.with_duration(duration).with_audio(audio_clip)
 
     # Export
@@ -250,7 +277,7 @@ def interactive_generate():
     print("=" * 60)
 
     # --- PASO 1: Imagen del meme ---
-    print("\n--- PASO 1: Imagen del meme (arriba) ---")
+    print("\n--- PASO 1: Imagen del meme (arriba, 70%) ---")
 
     img_extensions = {'.jpg', '.jpeg', '.png', '.webp', '.bmp'}
     available_memes = list_files(MEMES_DIR, img_extensions)
@@ -276,16 +303,31 @@ def interactive_generate():
     meme_path = available_memes[img_idx]
     print(f"   Seleccionado: {meme_path.name}")
 
-    # --- PASO 2: Caption ---
-    print("\n--- PASO 2: Caption (texto del medio) ---")
+    # --- PASO 2: Caption (OPCIONAL) ---
+    print("\n--- PASO 2: Caption (texto superpuesto, OPCIONAL) ---")
     print("   Ejemplo: 'El men que escribio el post:'")
+    print("   (Dejar vacio para NO caption)")
     caption = input("   Caption: ").strip()
-    if not caption:
-        print("   [X] Sin caption. Saliendo.")
-        return
+
+    caption_font_size = CAPTION_SIZES["M"]  # Default
+    if caption:
+        print(f"\n   Tamano del caption:")
+        print(f"     S  = Chiquito  ({CAPTION_SIZES['S']}px)")
+        print(f"     M  = Mediano   ({CAPTION_SIZES['M']}px) [default]")
+        print(f"     L  = Grande    ({CAPTION_SIZES['L']}px)")
+        print(f"     XL = Muy grande ({CAPTION_SIZES['XL']}px)")
+        size_input = input("   Tamano (S/M/L/XL): ").strip().upper()
+        if size_input in CAPTION_SIZES:
+            caption_font_size = CAPTION_SIZES[size_input]
+        else:
+            print(f"   [!] No valido, usando M ({CAPTION_SIZES['M']}px)")
+        print(f"   Caption: '{caption}' (tamano: {caption_font_size}px)")
+    else:
+        print("   [OK] Sin caption.")
+        caption = None  # Explicitamente None para el generador
 
     # --- PASO 3: Video clip ---
-    print("\n--- PASO 3: Video clip (parte de abajo) ---")
+    print("\n--- PASO 3: Video clip (parte de abajo, 30%) ---")
 
     available_clips = list_files(CLIPS_DIR, {'.mp4', '.webm', '.mov'})
 
@@ -387,13 +429,15 @@ def interactive_generate():
     print("   GENERANDO VIDEO")
     print("=" * 60)
     print(f"   Meme:     {meme_path.name}")
-    print(f"   Caption:  {caption}")
+    print(f"   Caption:  {caption if caption else '(sin caption)'}")
+    if caption:
+        print(f"   Font:     {caption_font_size}px")
     print(f"   Clip:     {clip_path.name}")
     print(f"   Audio:    {audio_path.name}")
     print(f"   Duracion: {duration:.1f}s")
     print(f"   Output:   {output_name}")
 
-    result = generate_video(meme_path, caption, clip_path, audio_path, duration, output_name)
+    result = generate_video(meme_path, caption, caption_font_size, clip_path, audio_path, duration, output_name)
 
     if result:
         print(f"\n   [OK] Video listo: {result}")
