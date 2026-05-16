@@ -152,7 +152,8 @@ output/**/*.mov
 output/**/*.mkv
 
 # =============================================================================
-# YouTube API - Credenciales (NUNCA subir al repo)
+# YouTube API - Credenciales y logs (NUNCA subir al repo)
 # =============================================================================
 client_secrets.json
 token.json
+uploaded_log.json
