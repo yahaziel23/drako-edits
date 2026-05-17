@@ -37,6 +37,7 @@ Formato del JSON:
     - "fill_mode": "cover" (cubre todo, puede cortar) o "fit" (completa, con fondo)
     - "image": nombre de archivo, nombre de carpeta, o "same" (misma que anterior)
     - "subtitle": texto, "same" (mismo que anterior), o null (sin subtitulo)
+    - "subtitle": usa | para salto de linea (ej. "hola|mundo" -> dos lineas)
     - "end": numero (timestamp) o "ultimo" (hasta el final del audio)
 """
 
@@ -250,7 +251,10 @@ def find_font():
 
 
 def render_subtitle(text, font_path):
-    """Renderiza subtitulo centrado con stroke negro."""
+    """Renderiza subtitulo centrado con stroke negro. Usa | para salto de linea."""
+    # Reemplazar | por salto de linea real
+    text = text.replace("|", "\n")
+
     try:
         font = ImageFont.truetype(font_path, FONT_SIZE) if font_path else ImageFont.load_default()
     except Exception:
@@ -267,7 +271,8 @@ def render_subtitle(text, font_path):
     x = -bbox[0] + STROKE_WIDTH + 10
     y = -bbox[1] + STROKE_WIDTH + 10
     draw.text((x, y), text, font=font, fill=(255, 255, 255, 255),
-              stroke_width=STROKE_WIDTH, stroke_fill=(0, 0, 0, 255))
+              stroke_width=STROKE_WIDTH, stroke_fill=(0, 0, 0, 255),
+              align="center")
 
     return np.array(img)
 
@@ -404,6 +409,7 @@ def ask_cuts(audio_duration):
     print(f"      - 'final' = cortar audio en el ultimo corte dado")
     print(f"   Para imagen/subtitulo: 'misma'/'mismo' repite el anterior.")
     print(f"   Las imagenes de carpeta NO se repiten hasta agotar el pool.")
+    print(f"   En subtitulos: usa | para salto de linea.")
 
     cut_num = 1
     while True:
@@ -515,7 +521,7 @@ def ask_image(previous_image):
 
 def ask_subtitle(previous_subtitle):
     """Pregunta el subtitulo. Retorna (text_or_None, raw_input_string)."""
-    prompt = "   Subtitulo"
+    prompt = "   Subtitulo (| = salto de linea)"
     if previous_subtitle:
         prompt += " ('mismo' para repetir)"
     prompt += ": "
