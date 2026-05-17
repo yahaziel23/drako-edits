@@ -23,6 +23,8 @@ Formato del JSON:
     {
         "audio": "tikitiki.mp3",
         "output_name": "tikitiki",
+        "background": "blur",
+        "fill_mode": "cover",
         "segments": [
             {"end": 0.866, "image": "tiki1", "subtitle": "Tikki..."},
             {"end": 1.783, "image": "same", "subtitle": "same"},
@@ -31,10 +33,11 @@ Formato del JSON:
     }
 
     Reglas del JSON:
+    - "background": "white", "black", o "blur" (imagen de fondo con transparencia)
+    - "fill_mode": "cover" (cubre todo, puede cortar) o "fit" (completa, con fondo)
     - "image": nombre de archivo, nombre de carpeta, o "same" (misma que anterior)
     - "subtitle": texto, "same" (mismo que anterior), o null (sin subtitulo)
     - "end": numero (timestamp) o "ultimo" (hasta el final del audio)
-    - El primer segmento empieza en 0.0, cada siguiente empieza donde acabo el anterior
 """
 
 import os
@@ -44,7 +47,7 @@ import random
 import argparse
 import numpy as np
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from moviepy import ImageClip, AudioFileClip, CompositeVideoClip
 from mutagen.mp3 import MP3
 from mutagen import File as MutagenFile
@@ -72,6 +75,10 @@ FONT_SIZE = 75
 STROKE_WIDTH = 5
 SUBTITLE_Y = int(VIDEO_HEIGHT * 0.50)
 
+# Blur background config
+BLUR_RADIUS = 30
+BLUR_OPACITY = 0.4  # 0=invisible, 1=fully visible (lower = more transparent/dark)
+
 
 # =============================================================================
 # TRACKING DE IMAGENES USADAS (no repetir)
@@ -81,13 +88,9 @@ class ImagePool:
     """Trackea imagenes usadas por carpeta para no repetir."""
 
     def __init__(self):
-        self.used = {}  # {folder_name: set of used filenames}
+        self.used = {}
 
     def get_random(self, folder_path):
-        """
-        Elige una imagen random de la carpeta sin repetir.
-        Si se agotan todas, resetea el pool para esa carpeta.
-        """
         folder_name = folder_path.name
         all_imgs = get_images_from_dir(folder_path)
 
@@ -97,10 +100,8 @@ class ImagePool:
         if folder_name not in self.used:
             self.used[folder_name] = set()
 
-        # Filtrar las no usadas
         available = [img for img in all_imgs if img.name not in self.used[folder_name]]
 
-        # Si se agotaron, resetear
         if not available:
             print(f"   [info] Pool agotado para '{folder_name}', reseteando...")
             self.used[folder_name] = set()
@@ -149,8 +150,8 @@ def get_subfolders(directory):
     return sorted([f for f in directory.iterdir() if f.is_dir()])
 
 
-def resize_to_vertical(img_path):
-    """Redimensiona y cropea cualquier imagen a 1080x1920."""
+def resize_cover(img_path):
+    """Redimensiona para CUBRIR todo 1080x1920 (puede cortar bordes)."""
     img = Image.open(img_path).convert("RGB")
     target_ratio = VIDEO_WIDTH / VIDEO_HEIGHT
     img_ratio = img.width / img.height
@@ -166,6 +167,69 @@ def resize_to_vertical(img_path):
     left = (new_w - VIDEO_WIDTH) // 2
     top = (new_h - VIDEO_HEIGHT) // 2
     return img.crop((left, top, left + VIDEO_WIDTH, top + VIDEO_HEIGHT))
+
+
+def resize_fit(img_path, background="black"):
+    """
+    Redimensiona para mostrar COMPLETA la imagen (sin cortar).
+    El espacio sobrante se llena segun background:
+    - "white": fondo blanco
+    - "black": fondo negro
+    - "blur": la misma imagen escalada a cover + blur + oscurecida
+    """
+    img = Image.open(img_path).convert("RGB")
+    target_ratio = VIDEO_WIDTH / VIDEO_HEIGHT
+    img_ratio = img.width / img.height
+
+    # Calcular tamano para fit (sin cortar)
+    if img_ratio > target_ratio:
+        # Imagen mas ancha: limitar por ancho
+        new_w = VIDEO_WIDTH
+        new_h = int(VIDEO_WIDTH / img_ratio)
+    else:
+        # Imagen mas alta: limitar por alto
+        new_h = VIDEO_HEIGHT
+        new_w = int(VIDEO_HEIGHT * img_ratio)
+
+    img_fitted = img.resize((new_w, new_h), Image.LANCZOS)
+
+    # Crear fondo segun tipo
+    if background == "blur":
+        # Fondo = misma imagen escalada a cover + blur + oscurecida
+        if img_ratio > target_ratio:
+            bg_h = VIDEO_HEIGHT
+            bg_w = int(bg_h * img_ratio)
+        else:
+            bg_w = VIDEO_WIDTH
+            bg_h = int(bg_w / img_ratio)
+
+        bg = img.resize((bg_w, bg_h), Image.LANCZOS)
+        left = (bg_w - VIDEO_WIDTH) // 2
+        top = (bg_h - VIDEO_HEIGHT) // 2
+        bg = bg.crop((left, top, left + VIDEO_WIDTH, top + VIDEO_HEIGHT))
+        bg = bg.filter(ImageFilter.GaussianBlur(radius=BLUR_RADIUS))
+
+        # Oscurecer el fondo (mezclar con negro)
+        dark = Image.new("RGB", (VIDEO_WIDTH, VIDEO_HEIGHT), (0, 0, 0))
+        canvas = Image.blend(dark, bg, BLUR_OPACITY)
+    elif background == "white":
+        canvas = Image.new("RGB", (VIDEO_WIDTH, VIDEO_HEIGHT), (255, 255, 255))
+    else:  # black
+        canvas = Image.new("RGB", (VIDEO_WIDTH, VIDEO_HEIGHT), (0, 0, 0))
+
+    # Centrar imagen sobre el fondo
+    x = (VIDEO_WIDTH - new_w) // 2
+    y = (VIDEO_HEIGHT - new_h) // 2
+    canvas.paste(img_fitted, (x, y))
+    return canvas
+
+
+def process_image(img_path, fill_mode, background):
+    """Procesa una imagen segun el modo elegido."""
+    if fill_mode == "cover":
+        return resize_cover(img_path)
+    else:  # fit
+        return resize_fit(img_path, background)
 
 
 def find_font():
@@ -209,11 +273,7 @@ def render_subtitle(text, font_path):
 
 
 def resolve_image(image_input):
-    """
-    Resuelve el input del usuario a un path de imagen.
-    Usa el pool para no repetir si es carpeta.
-    """
-    # Checar si es un archivo directo (con o sin extension)
+    """Resuelve el input del usuario a un path de imagen."""
     direct_matches = []
     for img in get_images_from_dir(IMAGES_DIR):
         if img.stem.lower() == image_input.lower() or img.name.lower() == image_input.lower():
@@ -222,7 +282,6 @@ def resolve_image(image_input):
     if direct_matches:
         return random.choice(direct_matches)
 
-    # Checar si es una subcarpeta (usar pool sin repetir)
     subfolder = IMAGES_DIR / image_input
     if subfolder.exists() and subfolder.is_dir():
         result = image_pool.get_random(subfolder)
@@ -260,6 +319,39 @@ def show_available_images():
 
     if not direct_imgs and not subfolders:
         print("   [!] No hay imagenes ni carpetas aun.")
+
+
+def ask_visual_settings():
+    """Pregunta las opciones visuales al inicio: fill mode y background."""
+    print("\n   --- Opciones visuales ---")
+
+    # Fill mode
+    print("\n   Como mostrar las imagenes?")
+    print("      1. cover  - Cubren todo (puede cortar bordes)")
+    print("      2. fit    - Se ven completas (con fondo donde sobre)")
+    fill_choice = input("   Modo [1=cover / 2=fit]: ").strip()
+    if fill_choice == "2" or fill_choice.lower() == "fit":
+        fill_mode = "fit"
+    else:
+        fill_mode = "cover"
+
+    # Background (solo relevante si es fit)
+    background = "black"
+    if fill_mode == "fit":
+        print("\n   Que fondo usar donde sobre espacio?")
+        print("      1. black  - Negro")
+        print("      2. white  - Blanco")
+        print("      3. blur   - Misma imagen borrosa de fondo")
+        bg_choice = input("   Fondo [1=black / 2=white / 3=blur]: ").strip()
+        if bg_choice == "2" or bg_choice.lower() == "white":
+            background = "white"
+        elif bg_choice == "3" or bg_choice.lower() == "blur":
+            background = "blur"
+        else:
+            background = "black"
+
+    print(f"\n   [OK] Modo: {fill_mode} | Fondo: {background}")
+    return fill_mode, background
 
 
 def ask_audio():
@@ -302,8 +394,6 @@ def ask_cuts(audio_duration):
     previous_image = None
     previous_subtitle = None
     last_cut = 0.0
-
-    # Para guardar el JSON despues
     json_segments = []
 
     print(f"\n   Duracion del audio: {audio_duration:.3f}s")
@@ -322,7 +412,6 @@ def ask_cuts(audio_duration):
 
         cut_input = input("   Corte (timestamp / ultimo / final): ").strip().lower()
 
-        # --- FINAL ---
         if cut_input == "final":
             if not segments:
                 print("   [!] No hay cortes previos. Da al menos un corte primero.")
@@ -330,7 +419,6 @@ def ask_cuts(audio_duration):
             print(f"   [OK] Video terminara en {last_cut:.3f}s (audio cortado ahi).")
             return segments, last_cut, json_segments
 
-        # --- ULTIMO ---
         if cut_input == "ultimo":
             end_time = audio_duration
             print(f"   Tramo: {last_cut:.3f}s -> {end_time:.3f}s (hasta el final)")
@@ -355,7 +443,6 @@ def ask_cuts(audio_duration):
             print(f"   [OK] Tramo final guardado.")
             return segments, audio_duration, json_segments
 
-        # --- TIMESTAMP ---
         try:
             cut_time = float(cut_input)
         except ValueError:
@@ -458,13 +545,9 @@ def ask_output_name():
 # =============================================================================
 
 def load_from_json(json_path):
-    """
-    Carga configuracion desde un archivo JSON.
-    Retorna: (audio_path, segments, total_duration, output_name)
-    """
+    """Carga configuracion desde un archivo JSON."""
     json_path = Path(json_path)
     if not json_path.exists():
-        # Buscar en configs/
         alt_path = CONFIGS_DIR / json_path.name
         if alt_path.exists():
             json_path = alt_path
@@ -474,7 +557,6 @@ def load_from_json(json_path):
 
     config = json.loads(json_path.read_text(encoding="utf-8"))
 
-    # Audio
     audio_name = config["audio"]
     audio_path = AUDIO_DIR / audio_name
     if not audio_path.exists():
@@ -483,22 +565,21 @@ def load_from_json(json_path):
 
     audio_duration = get_audio_duration(audio_path)
     output_name = config.get("output_name", "generic_video")
+    fill_mode = config.get("fill_mode", "cover")
+    background = config.get("background", "black")
 
-    # Parsear segmentos
     segments = []
     last_cut = 0.0
     previous_image = None
     previous_subtitle = None
 
     for i, seg_config in enumerate(config["segments"]):
-        # End time
         end_raw = seg_config["end"]
         if end_raw == "ultimo":
             end_time = audio_duration
         else:
             end_time = float(end_raw)
 
-        # Image
         img_raw = seg_config["image"]
         if img_raw and img_raw.lower() == "same":
             if previous_image is None:
@@ -511,7 +592,6 @@ def load_from_json(json_path):
                 print(f"   [X] Segmento {i+1}: no se pudo resolver imagen '{img_raw}'.")
                 sys.exit(1)
 
-        # Subtitle
         sub_raw = seg_config.get("subtitle")
         if sub_raw and str(sub_raw).lower() == "same":
             subtitle = previous_subtitle
@@ -532,16 +612,18 @@ def load_from_json(json_path):
         last_cut = end_time
 
     total_duration = last_cut
-    return audio_path, segments, total_duration, output_name
+    return audio_path, segments, total_duration, output_name, fill_mode, background
 
 
-def save_config_json(audio_name, json_segments, output_name):
+def save_config_json(audio_name, json_segments, output_name, fill_mode, background):
     """Guarda la configuracion como JSON para reusar."""
     CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
 
     config = {
         "audio": audio_name,
         "output_name": output_name,
+        "fill_mode": fill_mode,
+        "background": background,
         "segments": json_segments
     }
 
@@ -558,13 +640,14 @@ def save_config_json(audio_name, json_segments, output_name):
 # GENERADOR
 # =============================================================================
 
-def generate_video(audio_path, segments, total_duration, output_name):
+def generate_video(audio_path, segments, total_duration, output_name, fill_mode="cover", background="black"):
     """Genera el video con los segmentos definidos."""
     print(f"\n{'='*50}")
     print(f"   GENERANDO VIDEO")
     print(f"   Audio: {audio_path.name}")
     print(f"   Segmentos: {len(segments)}")
     print(f"   Duracion: {total_duration:.3f}s")
+    print(f"   Modo: {fill_mode} | Fondo: {background}")
     print(f"{'='*50}")
 
     font_path = find_font()
@@ -590,7 +673,8 @@ def generate_video(audio_path, segments, total_duration, output_name):
 
         print(f"   Segmento {i+1}: {start:.3f}s -> {end:.3f}s | img: {img_path.name} | sub: {subtitle or '(sin)'}")
 
-        img = resize_to_vertical(img_path)
+        # Procesar imagen segun modo
+        img = process_image(img_path, fill_mode, background)
         img_array = np.array(img)
         clip = ImageClip(img_array).with_start(start).with_duration(duration)
         all_clips.append(clip)
@@ -659,14 +743,15 @@ Ejemplos:
     # --- MODO JSON (rapido) ---
     if args.json:
         print("\n>>> Drako Edits -- Generador Generico (Config Rapida)")
-        audio_path, segments, total_duration, output_name = load_from_json(args.json)
+        audio_path, segments, total_duration, output_name, fill_mode, background = load_from_json(args.json)
 
         print(f"\n   Audio: {audio_path.name}")
         print(f"   Segmentos: {len(segments)}")
         print(f"   Duracion: {total_duration:.3f}s")
+        print(f"   Modo: {fill_mode} | Fondo: {background}")
         print(f"   Output: {output_name}.mp4")
 
-        generate_video(audio_path, segments, total_duration, output_name)
+        generate_video(audio_path, segments, total_duration, output_name, fill_mode, background)
         print("\n>>> Done!")
         return
 
@@ -676,6 +761,10 @@ Ejemplos:
     print(f"\n   Audio seleccionado: {audio_path.name}")
     print(f"   Duracion: {audio_duration:.3f}s")
 
+    # Preguntar opciones visuales
+    fill_mode, background = ask_visual_settings()
+
+    # Cortes
     segments, total_duration, json_segments = ask_cuts(audio_duration)
 
     if not segments:
@@ -686,6 +775,7 @@ Ejemplos:
     print(f"\n{'='*50}")
     print(f"   RESUMEN")
     print(f"{'='*50}")
+    print(f"   Modo: {fill_mode} | Fondo: {background}")
     for i, seg in enumerate(segments, 1):
         print(f"   {i}. [{seg['start']:.3f}s - {seg['end']:.3f}s] img: {seg['image_path'].name} | sub: {seg['subtitle'] or '(sin)'}")
     print(f"   Duracion total: {total_duration:.3f}s")
@@ -700,12 +790,12 @@ Ejemplos:
     output_name = ask_output_name()
 
     # Generar
-    generate_video(audio_path, segments, total_duration, output_name)
+    generate_video(audio_path, segments, total_duration, output_name, fill_mode, background)
 
     # Ofrecer guardar JSON
     save = input("\n   Guardar config como JSON para reusar? (s/n): ").strip().lower()
     if save in ("s", "si", "y", "yes", ""):
-        save_config_json(audio_path.name, json_segments, output_name)
+        save_config_json(audio_path.name, json_segments, output_name, fill_mode, background)
 
     print("\n>>> Done!")
 
