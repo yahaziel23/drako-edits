@@ -8,6 +8,7 @@ Formato: Imagen (meme) arriba + Video clip abajo
          El split se calcula dinamicamente segun el tamano real del meme y clip.
          El meme siempre ocupa mas espacio que el clip (min 55%, max 75%).
          Caption superpuesto en la frontera meme/video (opcional).
+         Usa | para salto de linea en el caption.
 
 Uso:
     python generate_meme_reaction.py
@@ -189,7 +190,13 @@ def calculate_layout(meme_path, clip_size):
 
 
 def render_caption(text, font_path, font_size):
-    """Renderiza caption con stroke negro. Retorna numpy array RGBA."""
+    """
+    Renderiza caption con stroke negro. Soporta multilinea (usa | como salto).
+    Retorna numpy array RGBA.
+    """
+    # Reemplazar | por salto de linea real
+    text = text.replace("|", "\n")
+
     try:
         font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
     except Exception:
@@ -206,7 +213,8 @@ def render_caption(text, font_path, font_size):
     x = -bbox[0] + STROKE_WIDTH + 10
     y = -bbox[1] + STROKE_WIDTH + 10
     draw.text((x, y), text, font=font, fill=(255, 255, 255, 255),
-              stroke_width=STROKE_WIDTH, stroke_fill=(0, 0, 0, 255))
+              stroke_width=STROKE_WIDTH, stroke_fill=(0, 0, 0, 255),
+              align="center")
 
     return np.array(img)
 
@@ -312,7 +320,7 @@ def select_music():
 
 def select_caption():
     """Pregunta si quiere caption y su tamano."""
-    caption_input = input("\n   Caption (texto, o Enter para sin caption): ").strip()
+    caption_input = input("\n   Caption (texto, | para salto de linea, Enter=sin): ").strip()
 
     if not caption_input:
         return None, None
