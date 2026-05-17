@@ -1,0 +1,21 @@
+{
+  "audio": "tikitiki.mp3",
+  "output_name": "tikitiki",
+  "segments": [
+    {"end": 0.866, "image": "tiki1", "subtitle": "Tikki..."},
+    {"end": 1.783, "image": "tiki1", "subtitle": "same"},
+    {"end": 2.628, "image": "tiki1", "subtitle": "Ti"},
+    {"end": 3.264, "image": "same", "subtitle": "Ki"},
+    {"end": 6.883, "image": "same", "subtitle": "Ma ti ti tata ta..."},
+    {"end": 7.743, "image": "tiki1", "subtitle": "Tikki..."},
+    {"end": 8.688, "image": "tiki1", "subtitle": "same"},
+    {"end": 10.46, "image": "tiki1", "subtitle": "Tikki... tiki ti"},
+    {"end": 11.35, "image": "tiki2", "subtitle": null},
+    {"end": 12.213, "image": "tiki2", "subtitle": null},
+    {"end": 13.11, "image": "tiki2", "subtitle": null},
+    {"end": 13.99, "image": "tiki2", "subtitle": null},
+    {"end": 14.8, "image": "tiki2", "subtitle": null},
+    {"end": 15.66, "image": "tiki2", "subtitle": null},
+    {"end": "ultimo", "image": "tiki2", "subtitle": null}
+  ]
+}
