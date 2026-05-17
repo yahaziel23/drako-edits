@@ -38,6 +38,7 @@ Formato del JSON:
     - "image": nombre de archivo, nombre de carpeta, o "same" (misma que anterior)
     - "subtitle": texto, "same" (mismo que anterior), o null (sin subtitulo)
     - "subtitle": usa | para salto de linea (ej. "hola|mundo" -> dos lineas)
+    - "subtitle": usa ^ al inicio para subir o v para bajar (ej. "^^texto" sube 2 pasos)
     - "end": numero (timestamp) o "ultimo" (hasta el final del audio)
 """
 
@@ -75,6 +76,7 @@ FPS = 30
 FONT_SIZE = 75
 STROKE_WIDTH = 5
 SUBTITLE_Y = int(VIDEO_HEIGHT * 0.50)
+SUBTITLE_Y_STEP = 80  # Pixeles por cada ^ (subir) o v (bajar)
 
 # Blur background config
 BLUR_RADIUS = 30
@@ -250,6 +252,25 @@ def find_font():
     return None
 
 
+def parse_subtitle_position(text):
+    """
+    Extrae modificadores de posicion del subtitulo.
+    ^ al inicio = subir (cada ^ sube SUBTITLE_Y_STEP px)
+    v al inicio = bajar (cada v baja SUBTITLE_Y_STEP px)
+    Retorna (texto_limpio, y_offset).
+    Ej: "^^hola" -> ("hola", -160)
+        "vvhola" -> ("hola", +160)
+    """
+    offset = 0
+    while text.startswith("^"):
+        offset -= SUBTITLE_Y_STEP
+        text = text[1:]
+    while text.startswith("v"):
+        offset += SUBTITLE_Y_STEP
+        text = text[1:]
+    return text.strip(), offset
+
+
 def render_subtitle(text, font_path):
     """Renderiza subtitulo centrado con stroke negro. Usa | para salto de linea."""
     # Reemplazar | por salto de linea real
@@ -409,7 +430,7 @@ def ask_cuts(audio_duration):
     print(f"      - 'final' = cortar audio en el ultimo corte dado")
     print(f"   Para imagen/subtitulo: 'misma'/'mismo' repite el anterior.")
     print(f"   Las imagenes de carpeta NO se repiten hasta agotar el pool.")
-    print(f"   En subtitulos: usa | para salto de linea.")
+    print(f"   En subtitulos: | = salto de linea, ^ = subir, v = bajar.")
 
     cut_num = 1
     while True:
@@ -521,7 +542,7 @@ def ask_image(previous_image):
 
 def ask_subtitle(previous_subtitle):
     """Pregunta el subtitulo. Retorna (text_or_None, raw_input_string)."""
-    prompt = "   Subtitulo (| = salto de linea)"
+    prompt = "   Subtitulo (| = enter, ^ = subir, v = bajar)"
     if previous_subtitle:
         prompt += " ('mismo' para repetir)"
     prompt += ": "
@@ -686,13 +707,17 @@ def generate_video(audio_path, segments, total_duration, output_name, fill_mode=
         all_clips.append(clip)
 
         if subtitle:
-            sub_img = render_subtitle(subtitle, font_path)
-            x_pos = max(0, (VIDEO_WIDTH - sub_img.shape[1]) // 2)
-            sub_clip = (ImageClip(sub_img, transparent=True)
-                        .with_position((x_pos, SUBTITLE_Y))
-                        .with_start(start)
-                        .with_duration(duration))
-            all_clips.append(sub_clip)
+            # Parsear posicion (^ para subir, v para bajar)
+            clean_text, y_offset = parse_subtitle_position(subtitle)
+            if clean_text:  # Solo si queda texto despues de quitar los modificadores
+                sub_img = render_subtitle(clean_text, font_path)
+                x_pos = max(0, (VIDEO_WIDTH - sub_img.shape[1]) // 2)
+                y_pos = SUBTITLE_Y + y_offset
+                sub_clip = (ImageClip(sub_img, transparent=True)
+                            .with_position((x_pos, y_pos))
+                            .with_start(start)
+                            .with_duration(duration))
+                all_clips.append(sub_clip)
 
     print(f"\n   Componiendo video...")
     final = CompositeVideoClip(all_clips, size=(VIDEO_WIDTH, VIDEO_HEIGHT))
