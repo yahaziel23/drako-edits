@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Drako Edits - Generador Generico (Interactivo)
+Drako Edits - Generador Generico (Interactivo + JSON rapido)
 
 Genera videos simples: audio + imagenes por tramo + subtitulos.
-El usuario define cortes (timestamps) y asigna imagen + subtitulo a cada tramo.
+Soporta configuracion paso a paso O carga rapida desde JSON.
 
 Uso:
-    python generate_generic.py
+    python generate_generic.py              # Interactivo (paso a paso)
+    python generate_generic.py --json config.json   # Config rapida desde archivo
 
 Estructura requerida:
     assets/generic/
@@ -15,19 +16,32 @@ Estructura requerida:
         images/
             foto1.png   <- imagen especifica (la pides por nombre)
             roses/      <- carpeta tematica (pides el nombre, elige random)
-            memes/
         output/         <- videos generados
+        configs/        <- JSONs guardados para reusar
 
-Flujo interactivo:
-    1. Elige audio
-    2. Se muestra duracion
-    3. Define cortes (timestamps) con imagen + subtitulo para cada tramo
-    4. Para terminar: "ultimo" (ultimo tramo hasta fin del audio) o "final" (corta ahi)
+Formato del JSON:
+    {
+        "audio": "tikitiki.mp3",
+        "output_name": "tikitiki",
+        "segments": [
+            {"end": 0.866, "image": "tiki1", "subtitle": "Tikki..."},
+            {"end": 1.783, "image": "same", "subtitle": "same"},
+            {"end": "ultimo", "image": "tiki2", "subtitle": null}
+        ]
+    }
+
+    Reglas del JSON:
+    - "image": nombre de archivo, nombre de carpeta, o "same" (misma que anterior)
+    - "subtitle": texto, "same" (mismo que anterior), o null (sin subtitulo)
+    - "end": numero (timestamp) o "ultimo" (hasta el final del audio)
+    - El primer segmento empieza en 0.0, cada siguiente empieza donde acabo el anterior
 """
 
 import os
 import sys
+import json
 import random
+import argparse
 import numpy as np
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
@@ -46,6 +60,7 @@ ASSETS_DIR = SCRIPT_DIR / "assets" / "generic"
 AUDIO_DIR = ASSETS_DIR / "audio"
 IMAGES_DIR = ASSETS_DIR / "images"
 OUTPUT_DIR = ASSETS_DIR / "output"
+CONFIGS_DIR = ASSETS_DIR / "configs"
 
 # Video config
 VIDEO_WIDTH = 1080
@@ -56,6 +71,48 @@ FPS = 30
 FONT_SIZE = 75
 STROKE_WIDTH = 5
 SUBTITLE_Y = int(VIDEO_HEIGHT * 0.50)
+
+
+# =============================================================================
+# TRACKING DE IMAGENES USADAS (no repetir)
+# =============================================================================
+
+class ImagePool:
+    """Trackea imagenes usadas por carpeta para no repetir."""
+
+    def __init__(self):
+        self.used = {}  # {folder_name: set of used filenames}
+
+    def get_random(self, folder_path):
+        """
+        Elige una imagen random de la carpeta sin repetir.
+        Si se agotan todas, resetea el pool para esa carpeta.
+        """
+        folder_name = folder_path.name
+        all_imgs = get_images_from_dir(folder_path)
+
+        if not all_imgs:
+            return None
+
+        if folder_name not in self.used:
+            self.used[folder_name] = set()
+
+        # Filtrar las no usadas
+        available = [img for img in all_imgs if img.name not in self.used[folder_name]]
+
+        # Si se agotaron, resetear
+        if not available:
+            print(f"   [info] Pool agotado para '{folder_name}', reseteando...")
+            self.used[folder_name] = set()
+            available = all_imgs
+
+        chosen = random.choice(available)
+        self.used[folder_name].add(chosen.name)
+        return chosen
+
+
+# Pool global
+image_pool = ImagePool()
 
 
 # =============================================================================
@@ -70,7 +127,6 @@ def get_audio_duration(audio_path):
             return audio.info.length
     except Exception:
         pass
-    # Fallback con moviepy
     clip = AudioFileClip(str(audio_path))
     duration = clip.duration
     clip.close()
@@ -130,10 +186,7 @@ def find_font():
 
 
 def render_subtitle(text, font_path):
-    """
-    Renderiza subtitulo centrado con stroke negro.
-    Retorna: numpy array RGBA.
-    """
+    """Renderiza subtitulo centrado con stroke negro."""
     try:
         font = ImageFont.truetype(font_path, FONT_SIZE) if font_path else ImageFont.load_default()
     except Exception:
@@ -158,9 +211,7 @@ def render_subtitle(text, font_path):
 def resolve_image(image_input):
     """
     Resuelve el input del usuario a un path de imagen.
-    - Si es un archivo directo en images/ -> usa ese
-    - Si es el nombre de una subcarpeta -> elige random de ahi
-    Retorna: Path o None
+    Usa el pool para no repetir si es carpeta.
     """
     # Checar si es un archivo directo (con o sin extension)
     direct_matches = []
@@ -171,17 +222,16 @@ def resolve_image(image_input):
     if direct_matches:
         return random.choice(direct_matches)
 
-    # Checar si es una subcarpeta
+    # Checar si es una subcarpeta (usar pool sin repetir)
     subfolder = IMAGES_DIR / image_input
     if subfolder.exists() and subfolder.is_dir():
-        folder_imgs = get_images_from_dir(subfolder)
-        if folder_imgs:
-            return random.choice(folder_imgs)
+        result = image_pool.get_random(subfolder)
+        if result:
+            return result
         else:
             print(f"   [!] La carpeta '{image_input}' esta vacia.")
             return None
 
-    # No encontrado
     print(f"   [!] No se encontro '{image_input}' como imagen ni carpeta en images/")
     return None
 
@@ -194,20 +244,19 @@ def show_available_images():
     """Muestra las imagenes y carpetas disponibles."""
     print("\n   Imagenes disponibles en assets/generic/images/:")
 
-    # Archivos directos
     direct_imgs = get_images_from_dir(IMAGES_DIR)
     if direct_imgs:
         print("   [Archivos directos (especificos)]:")
         for img in direct_imgs:
             print(f"      - {img.name}")
 
-    # Subcarpetas
     subfolders = get_subfolders(IMAGES_DIR)
     if subfolders:
         print("   [Carpetas (random de ahi)]:")
         for folder in subfolders:
-            count = len(get_images_from_dir(folder))
-            print(f"      - {folder.name}/ ({count} imgs)")
+            total = len(get_images_from_dir(folder))
+            used = len(image_pool.used.get(folder.name, set()))
+            print(f"      - {folder.name}/ ({total} imgs, {total - used} disponibles)")
 
     if not direct_imgs and not subfolders:
         print("   [!] No hay imagenes ni carpetas aun.")
@@ -219,13 +268,11 @@ def ask_audio():
     print("   GENERADOR GENERICO - Drako Edits")
     print("=" * 50)
 
-    # Mostrar audios disponibles
     audio_files = sorted(AUDIO_DIR.glob("*"))
     audio_files = [f for f in audio_files if f.suffix.lower() in {'.mp3', '.wav', '.ogg', '.m4a', '.aac'}]
 
     if not audio_files:
         print(f"\n   [X] No hay audios en {AUDIO_DIR}")
-        print(f"   Pon un audio ahi y vuelve a correr.")
         sys.exit(1)
 
     print("\n   Audios disponibles:")
@@ -235,7 +282,6 @@ def ask_audio():
     while True:
         choice = input("\n   Audio (nombre o numero): ").strip()
 
-        # Por numero
         if choice.isdigit():
             idx = int(choice) - 1
             if 0 <= idx < len(audio_files):
@@ -243,7 +289,6 @@ def ask_audio():
             print("   [!] Numero fuera de rango.")
             continue
 
-        # Por nombre
         for af in audio_files:
             if af.name.lower() == choice.lower() or af.stem.lower() == choice.lower():
                 return af
@@ -252,14 +297,14 @@ def ask_audio():
 
 
 def ask_cuts(audio_duration):
-    """
-    Pregunta los cortes al usuario.
-    Retorna lista de segmentos: [{start, end, image_path, subtitle}]
-    """
+    """Pregunta los cortes interactivamente."""
     segments = []
     previous_image = None
     previous_subtitle = None
     last_cut = 0.0
+
+    # Para guardar el JSON despues
+    json_segments = []
 
     print(f"\n   Duracion del audio: {audio_duration:.3f}s")
     print(f"   Define los cortes. En cada uno indicaras imagen y subtitulo.")
@@ -268,35 +313,33 @@ def ask_cuts(audio_duration):
     print(f"      - 'ultimo' = tramo final hasta el fin del audio")
     print(f"      - 'final' = cortar audio en el ultimo corte dado")
     print(f"   Para imagen/subtitulo: 'misma'/'mismo' repite el anterior.")
+    print(f"   Las imagenes de carpeta NO se repiten hasta agotar el pool.")
 
     cut_num = 1
     while True:
         print(f"\n   --- Corte {cut_num} ---")
         print(f"   (Tramo actual empieza en {last_cut:.3f}s)")
 
-        # Pedir corte
         cut_input = input("   Corte (timestamp / ultimo / final): ").strip().lower()
 
-        # --- FINAL: cortar audio en el ultimo corte ---
+        # --- FINAL ---
         if cut_input == "final":
             if not segments:
                 print("   [!] No hay cortes previos. Da al menos un corte primero.")
                 continue
             print(f"   [OK] Video terminara en {last_cut:.3f}s (audio cortado ahi).")
-            return segments, last_cut
+            return segments, last_cut, json_segments
 
-        # --- ULTIMO: tramo hasta el final del audio ---
+        # --- ULTIMO ---
         if cut_input == "ultimo":
             end_time = audio_duration
             print(f"   Tramo: {last_cut:.3f}s -> {end_time:.3f}s (hasta el final)")
 
-            # Pedir imagen
-            img_path = ask_image(previous_image)
+            img_path, img_input_raw = ask_image(previous_image)
             if img_path is None:
                 continue
 
-            # Pedir subtitulo
-            subtitle = ask_subtitle(previous_subtitle)
+            subtitle, sub_input_raw = ask_subtitle(previous_subtitle)
 
             segments.append({
                 "start": last_cut,
@@ -304,10 +347,15 @@ def ask_cuts(audio_duration):
                 "image_path": img_path,
                 "subtitle": subtitle
             })
+            json_segments.append({
+                "end": "ultimo",
+                "image": img_input_raw,
+                "subtitle": sub_input_raw
+            })
             print(f"   [OK] Tramo final guardado.")
-            return segments, audio_duration
+            return segments, audio_duration, json_segments
 
-        # --- TIMESTAMP NUMERICO ---
+        # --- TIMESTAMP ---
         try:
             cut_time = float(cut_input)
         except ValueError:
@@ -324,19 +372,22 @@ def ask_cuts(audio_duration):
 
         print(f"   Tramo: {last_cut:.3f}s -> {cut_time:.3f}s")
 
-        # Pedir imagen
-        img_path = ask_image(previous_image)
+        img_path, img_input_raw = ask_image(previous_image)
         if img_path is None:
             continue
 
-        # Pedir subtitulo
-        subtitle = ask_subtitle(previous_subtitle)
+        subtitle, sub_input_raw = ask_subtitle(previous_subtitle)
 
         segments.append({
             "start": last_cut,
             "end": cut_time,
             "image_path": img_path,
             "subtitle": subtitle
+        })
+        json_segments.append({
+            "end": cut_time,
+            "image": img_input_raw,
+            "subtitle": sub_input_raw
         })
 
         previous_image = img_path
@@ -348,7 +399,7 @@ def ask_cuts(audio_duration):
 
 
 def ask_image(previous_image):
-    """Pregunta la imagen para un tramo. Retorna Path o None."""
+    """Pregunta la imagen. Retorna (Path, raw_input_string)."""
     show_available_images()
 
     prompt = "   Imagen"
@@ -365,18 +416,18 @@ def ask_image(previous_image):
 
         if img_input.lower() in ("misma", "mismo", "same") and previous_image:
             print(f"   -> Usando misma: {previous_image.name}")
-            return previous_image
+            return previous_image, "same"
 
         resolved = resolve_image(img_input)
         if resolved:
             print(f"   -> Imagen: {resolved.name}")
-            return resolved
+            return resolved, img_input
 
         print("   [!] Intenta de nuevo.")
 
 
 def ask_subtitle(previous_subtitle):
-    """Pregunta el subtitulo para un tramo."""
+    """Pregunta el subtitulo. Retorna (text_or_None, raw_input_string)."""
     prompt = "   Subtitulo"
     if previous_subtitle:
         prompt += " ('mismo' para repetir)"
@@ -386,12 +437,12 @@ def ask_subtitle(previous_subtitle):
 
     if sub_input.lower() in ("mismo", "misma", "same") and previous_subtitle:
         print(f"   -> Usando mismo: \"{previous_subtitle}\"")
-        return previous_subtitle
+        return previous_subtitle, "same"
 
     if not sub_input or sub_input.lower() in ("nada", "none", "sin"):
-        return None
+        return None, None
 
-    return sub_input
+    return sub_input, sub_input
 
 
 def ask_output_name():
@@ -400,6 +451,107 @@ def ask_output_name():
     if not name:
         name = "generic_video"
     return name
+
+
+# =============================================================================
+# CONFIGURACION RAPIDA (JSON)
+# =============================================================================
+
+def load_from_json(json_path):
+    """
+    Carga configuracion desde un archivo JSON.
+    Retorna: (audio_path, segments, total_duration, output_name)
+    """
+    json_path = Path(json_path)
+    if not json_path.exists():
+        # Buscar en configs/
+        alt_path = CONFIGS_DIR / json_path.name
+        if alt_path.exists():
+            json_path = alt_path
+        else:
+            print(f"   [X] JSON no encontrado: {json_path}")
+            sys.exit(1)
+
+    config = json.loads(json_path.read_text(encoding="utf-8"))
+
+    # Audio
+    audio_name = config["audio"]
+    audio_path = AUDIO_DIR / audio_name
+    if not audio_path.exists():
+        print(f"   [X] Audio no encontrado: {audio_path}")
+        sys.exit(1)
+
+    audio_duration = get_audio_duration(audio_path)
+    output_name = config.get("output_name", "generic_video")
+
+    # Parsear segmentos
+    segments = []
+    last_cut = 0.0
+    previous_image = None
+    previous_subtitle = None
+
+    for i, seg_config in enumerate(config["segments"]):
+        # End time
+        end_raw = seg_config["end"]
+        if end_raw == "ultimo":
+            end_time = audio_duration
+        else:
+            end_time = float(end_raw)
+
+        # Image
+        img_raw = seg_config["image"]
+        if img_raw and img_raw.lower() == "same":
+            if previous_image is None:
+                print(f"   [X] Segmento {i+1}: 'same' pero no hay imagen anterior.")
+                sys.exit(1)
+            img_path = previous_image
+        else:
+            img_path = resolve_image(img_raw)
+            if img_path is None:
+                print(f"   [X] Segmento {i+1}: no se pudo resolver imagen '{img_raw}'.")
+                sys.exit(1)
+
+        # Subtitle
+        sub_raw = seg_config.get("subtitle")
+        if sub_raw and str(sub_raw).lower() == "same":
+            subtitle = previous_subtitle
+        elif sub_raw is None or str(sub_raw).lower() in ("null", "none", "nada", "sin", ""):
+            subtitle = None
+        else:
+            subtitle = str(sub_raw)
+
+        segments.append({
+            "start": last_cut,
+            "end": end_time,
+            "image_path": img_path,
+            "subtitle": subtitle
+        })
+
+        previous_image = img_path
+        previous_subtitle = subtitle
+        last_cut = end_time
+
+    total_duration = last_cut
+    return audio_path, segments, total_duration, output_name
+
+
+def save_config_json(audio_name, json_segments, output_name):
+    """Guarda la configuracion como JSON para reusar."""
+    CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
+
+    config = {
+        "audio": audio_name,
+        "output_name": output_name,
+        "segments": json_segments
+    }
+
+    config_path = CONFIGS_DIR / f"{output_name}.json"
+    config_path.write_text(
+        json.dumps(config, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+    print(f"   [OK] Config guardada: {config_path}")
+    print(f"   Reusar con: python generate_generic.py --json {config_path.name}")
 
 
 # =============================================================================
@@ -417,7 +569,7 @@ def generate_video(audio_path, segments, total_duration, output_name):
 
     font_path = find_font()
 
-    # Cargar audio y ajustar duracion para evitar error de precision flotante
+    # Cargar audio con ajuste de precision
     audio_clip = AudioFileClip(str(audio_path))
     safe_duration = min(total_duration, audio_clip.duration - 0.01)
     if safe_duration < total_duration:
@@ -427,10 +579,9 @@ def generate_video(audio_path, segments, total_duration, output_name):
 
     all_clips = []
 
-    # Construir clips por segmento
     for i, seg in enumerate(segments):
         start = seg["start"]
-        end = min(seg["end"], total_duration)  # Asegurar que no exceda
+        end = min(seg["end"], total_duration)
         duration = end - start
         if duration <= 0:
             continue
@@ -439,13 +590,11 @@ def generate_video(audio_path, segments, total_duration, output_name):
 
         print(f"   Segmento {i+1}: {start:.3f}s -> {end:.3f}s | img: {img_path.name} | sub: {subtitle or '(sin)'}")
 
-        # Imagen de fondo
         img = resize_to_vertical(img_path)
         img_array = np.array(img)
         clip = ImageClip(img_array).with_start(start).with_duration(duration)
         all_clips.append(clip)
 
-        # Subtitulo (si hay)
         if subtitle:
             sub_img = render_subtitle(subtitle, font_path)
             x_pos = max(0, (VIDEO_WIDTH - sub_img.shape[1]) // 2)
@@ -455,12 +604,10 @@ def generate_video(audio_path, segments, total_duration, output_name):
                         .with_duration(duration))
             all_clips.append(sub_clip)
 
-    # Componer
     print(f"\n   Componiendo video...")
     final = CompositeVideoClip(all_clips, size=(VIDEO_WIDTH, VIDEO_HEIGHT))
     final = final.with_duration(total_duration).with_audio(audio_clip)
 
-    # Export
     output_path = OUTPUT_DIR / f"{output_name}.mp4"
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -488,6 +635,19 @@ def generate_video(audio_path, segments, total_duration, output_name):
 # =============================================================================
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Drako Edits - Generador Generico",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Ejemplos:
+  python generate_generic.py                     # Interactivo
+  python generate_generic.py --json tikitiki.json # Config rapida
+        """
+    )
+    parser.add_argument("--json", type=str, default=None,
+                        help="Archivo JSON con la configuracion (rapido)")
+    args = parser.parse_args()
+
     # Verificar carpetas
     if not AUDIO_DIR.exists():
         print(f"[X] No existe: {AUDIO_DIR}")
@@ -496,20 +656,33 @@ def main():
         print(f"[X] No existe: {IMAGES_DIR}")
         sys.exit(1)
 
-    # 1. Pedir audio
+    # --- MODO JSON (rapido) ---
+    if args.json:
+        print("\n>>> Drako Edits -- Generador Generico (Config Rapida)")
+        audio_path, segments, total_duration, output_name = load_from_json(args.json)
+
+        print(f"\n   Audio: {audio_path.name}")
+        print(f"   Segmentos: {len(segments)}")
+        print(f"   Duracion: {total_duration:.3f}s")
+        print(f"   Output: {output_name}.mp4")
+
+        generate_video(audio_path, segments, total_duration, output_name)
+        print("\n>>> Done!")
+        return
+
+    # --- MODO INTERACTIVO (paso a paso) ---
     audio_path = ask_audio()
     audio_duration = get_audio_duration(audio_path)
     print(f"\n   Audio seleccionado: {audio_path.name}")
     print(f"   Duracion: {audio_duration:.3f}s")
 
-    # 2. Pedir cortes
-    segments, total_duration = ask_cuts(audio_duration)
+    segments, total_duration, json_segments = ask_cuts(audio_duration)
 
     if not segments:
         print("\n   [X] No se definieron segmentos. Saliendo.")
         sys.exit(1)
 
-    # 3. Resumen
+    # Resumen
     print(f"\n{'='*50}")
     print(f"   RESUMEN")
     print(f"{'='*50}")
@@ -517,17 +690,22 @@ def main():
         print(f"   {i}. [{seg['start']:.3f}s - {seg['end']:.3f}s] img: {seg['image_path'].name} | sub: {seg['subtitle'] or '(sin)'}")
     print(f"   Duracion total: {total_duration:.3f}s")
 
-    # 4. Confirmar
+    # Confirmar
     confirm = input("\n   Generar? (s/n): ").strip().lower()
     if confirm not in ("s", "si", "y", "yes", ""):
         print("   Cancelado.")
         sys.exit(0)
 
-    # 5. Nombre de salida
+    # Nombre
     output_name = ask_output_name()
 
-    # 6. Generar
+    # Generar
     generate_video(audio_path, segments, total_duration, output_name)
+
+    # Ofrecer guardar JSON
+    save = input("\n   Guardar config como JSON para reusar? (s/n): ").strip().lower()
+    if save in ("s", "si", "y", "yes", ""):
+        save_config_json(audio_path.name, json_segments, output_name)
 
     print("\n>>> Done!")
 
