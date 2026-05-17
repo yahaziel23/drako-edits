@@ -3,9 +3,11 @@
 """
 Drako Edits - Generador de Meme Reaction Videos
 
-Formato: Imagen (meme) arriba (60%) + Video clip abajo (40%)
-         Caption superpuesto en la frontera meme/video (opcional)
-Duracion: min(video, audio) o custom.
+Formato: Imagen (meme) arriba + Video clip abajo
+         Sin crop: ambos se muestran completos con fondo negro si sobra.
+         El split se calcula dinamicamente segun el tamano real del meme y clip.
+         El meme siempre ocupa mas espacio que el clip (min 55%, max 75%).
+         Caption superpuesto en la frontera meme/video (opcional).
 
 Uso:
     python generate_meme_reaction.py
@@ -49,9 +51,9 @@ VIDEO_WIDTH = 1080
 VIDEO_HEIGHT = 1920
 FPS = 30
 
-# Layout proportions
-MEME_RATIO = 0.60   # Meme ocupa 60% del alto
-CLIP_RATIO = 0.40   # Video clip ocupa 40% del alto
+# Layout limits: el meme siempre ocupa mas que el clip
+MEME_MIN_RATIO = 0.55  # Minimo 55% del alto para el meme
+MEME_MAX_RATIO = 0.75  # Maximo 75% del alto para el meme
 
 # Font config
 STROKE_WIDTH = 4
@@ -120,43 +122,80 @@ def find_font():
     return None
 
 
-def resize_meme(img_path, target_width, target_height):
-    """Redimensiona la imagen del meme al area superior (crop centrado)."""
-    img = Image.open(img_path).convert("RGB")
-    target_ratio = target_width / target_height
+def fit_image_to_area(img, area_width, area_height):
+    """
+    Escala la imagen para que quepa COMPLETA dentro del area (sin crop).
+    Retorna imagen con fondo negro del tamano exacto del area.
+    """
     img_ratio = img.width / img.height
+    area_ratio = area_width / area_height
 
-    if img_ratio > target_ratio:
-        new_h = target_height
-        new_w = int(new_h * img_ratio)
+    if img_ratio > area_ratio:
+        # Imagen mas ancha que el area: limitar por ancho
+        new_w = area_width
+        new_h = int(area_width / img_ratio)
     else:
-        new_w = target_width
-        new_h = int(new_w / img_ratio)
+        # Imagen mas alta que el area: limitar por alto
+        new_h = area_height
+        new_w = int(area_height * img_ratio)
 
     img = img.resize((new_w, new_h), Image.LANCZOS)
-    left = (new_w - target_width) // 2
-    top = (new_h - target_height) // 2
-    return img.crop((left, top, left + target_width, top + target_height))
+
+    # Centrar sobre fondo negro
+    canvas = Image.new("RGB", (area_width, area_height), (0, 0, 0))
+    x = (area_width - new_w) // 2
+    y = (area_height - new_h) // 2
+    canvas.paste(img, (x, y))
+    return canvas
 
 
-def resize_clip_frame(frame, target_width, target_height):
-    """Redimensiona un frame del clip al area inferior (crop centrado)."""
-    img = Image.fromarray(frame)
-    target_ratio = target_width / target_height
-    img_ratio = img.width / img.height
+def calculate_layout(meme_path, clip_size):
+    """
+    Calcula el split dinamico entre meme y clip basado en sus dimensiones reales.
+    Ambos se muestran completos (fit, no crop).
+    El meme siempre ocupa entre MEME_MIN_RATIO y MEME_MAX_RATIO del alto total.
 
-    if img_ratio > target_ratio:
-        new_h = target_height
-        new_w = int(new_h * img_ratio)
+    Args:
+        meme_path: Path a la imagen del meme
+        clip_size: tupla (width, height) del clip de video
+
+    Returns:
+        (meme_area_height, clip_area_height) en pixeles
+    """
+    # Calcular altura natural del meme si lo fiteamos al ancho completo
+    meme_img = Image.open(meme_path)
+    meme_ratio = meme_img.width / meme_img.height
+    meme_natural_h = int(VIDEO_WIDTH / meme_ratio)
+
+    # Calcular altura natural del clip si lo fiteamos al ancho completo
+    clip_w, clip_h = clip_size
+    clip_ratio = clip_w / clip_h
+    clip_natural_h = int(VIDEO_WIDTH / clip_ratio)
+
+    total_needed = meme_natural_h + clip_natural_h
+
+    if total_needed <= VIDEO_HEIGHT:
+        # Ambos caben, distribuir espacio sobrante
+        meme_area_h = meme_natural_h + (VIDEO_HEIGHT - total_needed) // 2
+        clip_area_h = VIDEO_HEIGHT - meme_area_h
     else:
-        new_w = target_width
-        new_h = int(new_w / img_ratio)
+        # No caben juntos: escalar proporcionalmente
+        scale = VIDEO_HEIGHT / total_needed
+        meme_area_h = int(meme_natural_h * scale)
+        clip_area_h = VIDEO_HEIGHT - meme_area_h
 
-    img = img.resize((new_w, new_h), Image.LANCZOS)
-    left = (new_w - target_width) // 2
-    top = (new_h - target_height) // 2
-    cropped = img.crop((left, top, left + target_width, top + target_height))
-    return np.array(cropped)
+    # Aplicar limites: meme siempre entre 55% y 75%
+    min_meme_h = int(VIDEO_HEIGHT * MEME_MIN_RATIO)
+    max_meme_h = int(VIDEO_HEIGHT * MEME_MAX_RATIO)
+
+    if meme_area_h < min_meme_h:
+        meme_area_h = min_meme_h
+        clip_area_h = VIDEO_HEIGHT - meme_area_h
+    elif meme_area_h > max_meme_h:
+        meme_area_h = max_meme_h
+        clip_area_h = VIDEO_HEIGHT - meme_area_h
+
+    return meme_area_h, clip_area_h
 
 
 def render_caption(text, font_path, font_size):
@@ -235,7 +274,6 @@ def select_clip():
                     print(f"   [!] Archivo no encontrado: {clip_path}")
             print("   [!] No valido.")
     else:
-        # Sin indice, mostrar archivos directos
         clips = get_videos_from_dir(CLIPS_DIR)
         if not clips:
             print(f"\n   [X] No hay clips en {CLIPS_DIR}")
@@ -259,7 +297,7 @@ def select_clip():
 
 
 def select_music():
-    """Muestra audios disponibles y deja elegir. Puede elegir 'sin' para no usar."""
+    """Muestra audios disponibles y deja elegir."""
     music_files = get_audio_files(MUSIC_DIR)
 
     if not music_files:
@@ -311,18 +349,22 @@ def generate_video(meme_path, clip_path, music_path, caption_text, caption_size,
     print(f"   Caption: {caption_text or '(sin)'}")
     print(f"{'='*50}")
 
-    # Calcular dimensiones
-    meme_height = int(VIDEO_HEIGHT * MEME_RATIO)
-    clip_height = VIDEO_HEIGHT - meme_height
-
-    # Cargar y procesar meme (imagen estatica)
-    print("\n   Procesando meme...")
-    meme_img = resize_meme(meme_path, VIDEO_WIDTH, meme_height)
-    meme_array = np.array(meme_img)
-
-    # Cargar clip de video
-    print("   Cargando clip...")
+    # Cargar clip para obtener dimensiones
+    print("\n   Cargando clip...")
     video_clip = VideoFileClip(str(clip_path))
+    clip_size = video_clip.size  # (width, height)
+
+    # Calcular layout dinamico
+    meme_area_h, clip_area_h = calculate_layout(meme_path, clip_size)
+    meme_pct = (meme_area_h / VIDEO_HEIGHT) * 100
+    clip_pct = (clip_area_h / VIDEO_HEIGHT) * 100
+    print(f"   Layout dinamico: meme={meme_area_h}px ({meme_pct:.0f}%) | clip={clip_area_h}px ({clip_pct:.0f}%)")
+
+    # Preparar meme (fit completo, sin crop, fondo negro)
+    print("   Procesando meme...")
+    meme_img = Image.open(meme_path).convert("RGB")
+    meme_fitted = fit_image_to_area(meme_img, VIDEO_WIDTH, meme_area_h)
+    meme_array = np.array(meme_fitted)
 
     # Determinar duracion
     if music_path:
@@ -337,19 +379,21 @@ def generate_video(meme_path, clip_path, music_path, caption_text, caption_size,
     # Recortar clip a duracion
     video_clip = video_clip.subclipped(0, min(duration, video_clip.duration - 0.01))
 
-    # Procesar frames del clip para ajustar tamano
-    # image_transform aplica la funcion frame->frame directamente
+    # Procesar frames del clip: fit completo dentro del area, fondo negro
     def process_frame(frame):
-        return resize_clip_frame(frame, VIDEO_WIDTH, clip_height)
+        img = Image.fromarray(frame)
+        fitted = fit_image_to_area(img, VIDEO_WIDTH, clip_area_h)
+        return np.array(fitted)
 
+    print("   Procesando frames del clip...")
     processed_clip = video_clip.image_transform(process_frame)
 
-    # Crear clip de meme (imagen estatica durante toda la duracion)
+    # Crear clip de meme (imagen estatica)
     meme_clip = ImageClip(meme_array).with_duration(duration)
 
     # Posicionar: meme arriba, clip abajo
     meme_clip = meme_clip.with_position((0, 0))
-    processed_clip = processed_clip.with_position((0, meme_height))
+    processed_clip = processed_clip.with_position((0, meme_area_h))
 
     # Construir composicion
     layers = [meme_clip, processed_clip]
@@ -359,11 +403,11 @@ def generate_video(meme_path, clip_path, music_path, caption_text, caption_size,
         font_path = find_font()
         caption_img = render_caption(caption_text, font_path, caption_size)
         x_pos = max(0, (VIDEO_WIDTH - caption_img.shape[1]) // 2)
-        y_pos = meme_height - caption_img.shape[0] // 2  # Centrado en la frontera
-        caption_clip = (ImageClip(caption_img, transparent=True)
-                        .with_position((x_pos, y_pos))
-                        .with_duration(duration))
-        layers.append(caption_clip)
+        y_pos = meme_area_h - caption_img.shape[0] // 2  # Centrado en la frontera
+        cap_clip = (ImageClip(caption_img, transparent=True)
+                    .with_position((x_pos, y_pos))
+                    .with_duration(duration))
+        layers.append(cap_clip)
 
     # Componer
     print("   Componiendo video...")
@@ -375,7 +419,6 @@ def generate_video(meme_path, clip_path, music_path, caption_text, caption_size,
         audio_clip = audio_clip.subclipped(0, min(duration, audio_clip.duration - 0.01))
         final = final.with_audio(audio_clip)
     else:
-        # Usar audio del clip original
         if video_clip.audio:
             final = final.with_audio(video_clip.audio)
 
