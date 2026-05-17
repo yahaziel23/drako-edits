@@ -388,7 +388,7 @@ def ask_subtitle(previous_subtitle):
         print(f"   -> Usando mismo: \"{previous_subtitle}\"")
         return previous_subtitle
 
-    if not sub_input or sub_input.lower() in ("nada", "none", "sin", ""):
+    if not sub_input or sub_input.lower() in ("nada", "none", "sin"):
         return None
 
     return sub_input
@@ -416,15 +416,24 @@ def generate_video(audio_path, segments, total_duration, output_name):
     print(f"{'='*50}")
 
     font_path = find_font()
-    audio_clip = AudioFileClip(str(audio_path)).subclipped(0, total_duration)
+
+    # Cargar audio y ajustar duracion para evitar error de precision flotante
+    audio_clip = AudioFileClip(str(audio_path))
+    safe_duration = min(total_duration, audio_clip.duration - 0.01)
+    if safe_duration < total_duration:
+        print(f"   [info] Ajustando duracion: {total_duration:.3f}s -> {safe_duration:.3f}s (precision de audio)")
+        total_duration = safe_duration
+    audio_clip = audio_clip.subclipped(0, total_duration)
 
     all_clips = []
 
     # Construir clips por segmento
     for i, seg in enumerate(segments):
         start = seg["start"]
-        end = seg["end"]
+        end = min(seg["end"], total_duration)  # Asegurar que no exceda
         duration = end - start
+        if duration <= 0:
+            continue
         img_path = seg["image_path"]
         subtitle = seg["subtitle"]
 
