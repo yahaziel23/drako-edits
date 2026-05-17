@@ -338,10 +338,11 @@ def generate_video(meme_path, clip_path, music_path, caption_text, caption_size,
     video_clip = video_clip.subclipped(0, min(duration, video_clip.duration - 0.01))
 
     # Procesar frames del clip para ajustar tamano
+    # image_transform aplica la funcion frame->frame directamente
     def process_frame(frame):
         return resize_clip_frame(frame, VIDEO_WIDTH, clip_height)
 
-    processed_clip = video_clip.transform(process_frame)
+    processed_clip = video_clip.image_transform(process_frame)
 
     # Crear clip de meme (imagen estatica durante toda la duracion)
     meme_clip = ImageClip(meme_array).with_duration(duration)
