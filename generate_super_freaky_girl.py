@@ -48,7 +48,7 @@ SEQUENCES_DIR = ASSETS_DIR / "sequences"
 OUTPUT_DIR = ASSETS_DIR / "output"
 
 # Timing del audio (en segundos)
-AUDIO_DURATION = 11.540
+AUDIO_FULL_DURATION = 11.540
 SPELLING_START = 4.342
 
 # Intro: 8 imagenes en los primeros 4.342 segundos
@@ -56,14 +56,17 @@ INTRO_IMAGE_COUNT = 8
 INTRO_DURATION = SPELLING_START  # 4.342s
 INTRO_TIME_PER_IMAGE = INTRO_DURATION / INTRO_IMAGE_COUNT  # ~0.543s
 
-# Spelling: del 4.342 al 11.540
-SPELLING_DURATION = AUDIO_DURATION - SPELLING_START  # 7.198s
-MAX_TIME_PER_LETTER = 1.0  # maximo 1 segundo por letra
+# Spelling: maximo disponible del 4.342 al 11.540
+SPELLING_MAX_DURATION = AUDIO_FULL_DURATION - SPELLING_START  # 7.198s
+MAX_TIME_PER_LETTER = 0.6  # maximo 0.6 segundos por letra/item
 
 # Video config
 VIDEO_WIDTH = 1080
 VIDEO_HEIGHT = 1920
 FPS = 30
+
+# Letter sizing: las letras se muestran mas chicas con fondo blanco
+LETTER_SCALE = 0.55  # 55% del ancho del video
 
 # Caption config
 FONT_SIZE = 80
@@ -101,6 +104,36 @@ def resize_to_vertical(img_path):
     left = (new_w - VIDEO_WIDTH) // 2
     top = (new_h - VIDEO_HEIGHT) // 2
     return img.crop((left, top, left + VIDEO_WIDTH, top + VIDEO_HEIGHT))
+
+
+def resize_letter_on_white(img_path):
+    """
+    Coloca la imagen de la letra centrada sobre un fondo blanco 1080x1920.
+    La letra se escala a LETTER_SCALE del ancho del video (mas chica).
+    """
+    img = Image.open(img_path).convert("RGBA")
+
+    # Calcular nuevo tamano manteniendo proporcion
+    target_w = int(VIDEO_WIDTH * LETTER_SCALE)
+    ratio = target_w / img.width
+    target_h = int(img.height * ratio)
+
+    # Si la altura escalada es muy grande, limitar por altura
+    max_h = int(VIDEO_HEIGHT * 0.5)
+    if target_h > max_h:
+        ratio = max_h / img.height
+        target_w = int(img.width * ratio)
+        target_h = max_h
+
+    img = img.resize((target_w, target_h), Image.LANCZOS)
+
+    # Crear fondo blanco y pegar centrado
+    canvas = Image.new("RGB", (VIDEO_WIDTH, VIDEO_HEIGHT), (255, 255, 255))
+    x = (VIDEO_WIDTH - target_w) // 2
+    y = (VIDEO_HEIGHT - target_h) // 2
+    canvas.paste(img, (x, y), img if img.mode == "RGBA" else None)
+
+    return canvas
 
 
 def find_font():
@@ -185,29 +218,31 @@ def render_caption(text, font_path):
 
 def calculate_spelling_timing(name_length):
     """
-    Calcula la duracion de cada letra y de la imagen de cierre.
+    Calcula la duracion de cada letra y la duracion total del video.
     
     Reglas:
     - Total items = letras del nombre + 1 imagen de cierre
-    - Se divide el tiempo de spelling entre todos los items
-    - Si el tiempo por item > 1 segundo: cada letra = 1s, cierre = el resto
-    - Si el tiempo por item <= 1 segundo: se distribuye parejo
+    - Cada item dura maximo MAX_TIME_PER_LETTER (0.6s)
+    - Si el nombre es largo y no cabe en el audio, se distribuye parejo
+    - El audio se CORTA despues del ultimo item (no se usa todo si sobra)
     
-    Retorna: (time_per_letter, closing_duration)
+    Retorna: (time_per_letter, total_video_duration)
     """
     total_items = name_length + 1  # letras + imagen de cierre
-    time_per_item = SPELLING_DURATION / total_items
     
-    if time_per_item > MAX_TIME_PER_LETTER:
-        # Nombre corto: cap a 1s por letra, cierre se queda el resto
+    # Cuanto duraria si usamos el maximo por item
+    spelling_needed = total_items * MAX_TIME_PER_LETTER
+    
+    if spelling_needed <= SPELLING_MAX_DURATION:
+        # Cabe con 0.6s por item: usamos 0.6 y cortamos audio
         time_per_letter = MAX_TIME_PER_LETTER
-        closing_duration = SPELLING_DURATION - (name_length * MAX_TIME_PER_LETTER)
+        total_video_duration = SPELLING_START + spelling_needed
     else:
-        # Nombre largo: distribuir parejo
-        time_per_letter = time_per_item
-        closing_duration = time_per_item
+        # No cabe: distribuir parejo en todo el audio disponible
+        time_per_letter = SPELLING_MAX_DURATION / total_items
+        total_video_duration = AUDIO_FULL_DURATION
     
-    return time_per_letter, closing_duration
+    return time_per_letter, total_video_duration
 
 
 # =============================================================================
@@ -277,9 +312,11 @@ def generate_video(name, mode="letters", caption="Cuando se llama...",
     print(f"   Letras/items a mostrar: {num_spelling}")
 
     # --- Calcular timing ---
-    time_per_letter, closing_duration = calculate_spelling_timing(num_spelling)
+    time_per_letter, total_video_duration = calculate_spelling_timing(num_spelling)
+    spelling_total = time_per_letter * (num_spelling + 1)
     print(f"   Tiempo por letra: {time_per_letter:.3f}s")
-    print(f"   Imagen de cierre: {closing_duration:.3f}s")
+    print(f"   Spelling total (letras + cierre): {spelling_total:.3f}s")
+    print(f"   Duracion total del video: {total_video_duration:.3f}s")
     print(f"   Intro: {INTRO_IMAGE_COUNT} imgs x {INTRO_TIME_PER_IMAGE:.3f}s = {INTRO_DURATION:.3f}s")
 
     # --- Seleccionar imagenes de intro ---
@@ -291,8 +328,8 @@ def generate_video(name, mode="letters", caption="Cuando se llama...",
     # Imagen de cierre: una mas del intro (random)
     closing_image_path = random.choice(intro_images)
 
-    # --- Cargar audio ---
-    audio_clip = AudioFileClip(str(AUDIO_PATH)).subclipped(0, AUDIO_DURATION)
+    # --- Cargar audio (cortado a la duracion calculada) ---
+    audio_clip = AudioFileClip(str(AUDIO_PATH)).subclipped(0, total_video_duration)
 
     # --- Construir clips ---
     font_path = find_font()
@@ -308,20 +345,20 @@ def generate_video(name, mode="letters", caption="Cuando se llama...",
         all_clips.append(clip)
         current_time += INTRO_TIME_PER_IMAGE
 
-    # FASE 2: Spelling (letra por letra)
+    # FASE 2: Spelling (letra por letra, con fondo blanco)
     print(f"   Construyendo spelling...")
     for i, img_path in enumerate(spelling_images):
-        img = resize_to_vertical(img_path)
+        img = resize_letter_on_white(img_path)
         img_array = np.array(img)
         clip = ImageClip(img_array).with_start(current_time).with_duration(time_per_letter)
         all_clips.append(clip)
         current_time += time_per_letter
 
-    # FASE 3: Imagen de cierre (se queda hasta el final)
+    # FASE 3: Imagen de cierre (se queda hasta el final del audio cortado)
     print(f"   Construyendo cierre...")
     closing_img = resize_to_vertical(closing_image_path)
     closing_array = np.array(closing_img)
-    closing_clip = ImageClip(closing_array).with_start(current_time).with_duration(closing_duration)
+    closing_clip = ImageClip(closing_array).with_start(current_time).with_duration(time_per_letter)
     all_clips.append(closing_clip)
 
     # --- Caption fijo (durante todo el video) ---
@@ -330,13 +367,13 @@ def generate_video(name, mode="letters", caption="Cuando se llama...",
     caption_clip = (ImageClip(caption_img, transparent=True)
                     .with_position((x_pos, CAPTION_Y))
                     .with_start(0)
-                    .with_duration(AUDIO_DURATION))
+                    .with_duration(total_video_duration))
     all_clips.append(caption_clip)
 
     # --- Componer video final ---
     print(f"   Componiendo video...")
     final = CompositeVideoClip(all_clips, size=(VIDEO_WIDTH, VIDEO_HEIGHT))
-    final = final.with_duration(AUDIO_DURATION).with_audio(audio_clip)
+    final = final.with_duration(total_video_duration).with_audio(audio_clip)
 
     # --- Export ---
     if output_name is None:
