@@ -61,18 +61,18 @@ def format_time(seconds):
     hours = total_seconds // 3600
     minutes = (total_seconds % 3600) // 60
     secs = total_seconds % 60
-    ms = int((seconds - int(seconds)) * 100)
+    ms = int((seconds - int(seconds)) * 1000)
 
     if hours > 0:
-        return f"{hours:02d}:{minutes:02d}:{secs:02d}.{ms:02d}"
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}.{ms:03d}"
     else:
-        return f"{minutes:02d}:{secs:02d}.{ms:02d}"
+        return f"{minutes:02d}:{secs:02d}.{ms:03d}"
 
 
 def parse_time_input(time_str):
     """
     Parsea input de tiempo flexible. Acepta:
-        - Segundos: "30", "90.5"
+        - Segundos: "30", "90.5", "2.456"
         - MM:SS: "1:30", "01:30.5"
         - HH:MM:SS: "1:05:30", "01:05:30.5"
     Retorna segundos como float.
@@ -131,33 +131,52 @@ def get_video_duration(video_path):
 
 def trim_with_ffmpeg(input_path, output_path, start, end=None, duration=None):
     """
-    Recorta video usando ffmpeg con stream copy (rapido, sin re-encoding).
-    Si falla con copy, reintenta con re-encoding.
+    Recorta video usando ffmpeg.
+    Primero intenta re-encoding (preciso), si el usuario prefiere speed puede
+    usar copy pero con -ss despues de -i para precision.
     """
-    # Construir comando base
-    cmd = [
-        "ffmpeg", "-y",
-        "-ss", str(start),
-        "-i", str(input_path),
-    ]
-
+    # Calcular duracion del recorte
     if duration is not None:
-        cmd += ["-t", str(duration)]
+        trim_duration = duration
     elif end is not None:
-        cmd += ["-t", str(end - start)]
+        trim_duration = end - start
+    else:
+        trim_duration = None
 
-    # Intentar primero con copy (rapido)
-    cmd_copy = cmd + ["-c", "copy", "-avoid_negative_ts", "make_zero", str(output_path)]
+    # Intento 1: copy con -ss DESPUES de -i (frame-accurate seeking)
+    cmd_copy = [
+        "ffmpeg", "-y",
+        "-i", str(input_path),
+        "-ss", str(start),
+    ]
+    if trim_duration is not None:
+        cmd_copy += ["-t", str(trim_duration)]
+    cmd_copy += ["-c", "copy", "-avoid_negative_ts", "make_zero", str(output_path)]
 
     print("   Intentando recorte rapido (sin re-encoding)...")
     result = subprocess.run(cmd_copy, capture_output=True, text=True)
 
     if result.returncode == 0:
-        return True, "copy"
+        # Verificar que la duracion del output es razonable
+        out_dur = get_video_duration(output_path)
+        if out_dur and trim_duration and abs(out_dur - trim_duration) < 1.0:
+            return True, "copy"
+        elif out_dur and trim_duration and abs(out_dur - trim_duration) >= 1.0:
+            print(f"   [!] Copy impreciso ({format_time(out_dur)} vs esperado {format_time(trim_duration)})")
+            print("   Re-encoding para precision exacta...")
+            # Caer al re-encode
+        else:
+            return True, "copy"
 
-    # Si fallo, reintentar con re-encoding
-    print("   Re-encoding necesario (puede tardar mas)...")
-    cmd_encode = cmd + [
+    # Intento 2: Re-encoding (siempre preciso)
+    cmd_encode = [
+        "ffmpeg", "-y",
+        "-ss", str(start),
+        "-i", str(input_path),
+    ]
+    if trim_duration is not None:
+        cmd_encode += ["-t", str(trim_duration)]
+    cmd_encode += [
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "18",
@@ -165,6 +184,9 @@ def trim_with_ffmpeg(input_path, output_path, start, end=None, duration=None):
         "-b:a", "192k",
         str(output_path)
     ]
+
+    if result.returncode != 0:
+        print("   Re-encoding necesario (puede tardar mas)...")
 
     result = subprocess.run(cmd_encode, capture_output=True, text=True)
 
@@ -327,7 +349,9 @@ def trim_video(video_path, start, end, trim_duration, output_name=None):
 
     if success:
         size_mb = output_path.stat().st_size / (1024 * 1024)
-        print(f"\n   [OK] Listo! ({method})")
+        out_dur = get_video_duration(output_path)
+        dur_str = f" - Duracion real: {format_time(out_dur)}" if out_dur else ""
+        print(f"\n   [OK] Listo! ({method}){dur_str}")
         print(f"   Archivo: {output_path.name}")
         print(f"   Tamano: {size_mb:.1f} MB")
         print(f"   Ruta: {output_path}")
