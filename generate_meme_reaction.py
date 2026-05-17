@@ -4,7 +4,7 @@
 Drako Edits - Generador de Meme Reaction Videos
 
 Formato: Imagen (meme) arriba + Video clip abajo
-         Sin crop: ambos se muestran completos con fondo negro si sobra.
+         Sin crop: ambos se muestran completos con fondo blanco si sobra.
          El split se calcula dinamicamente segun el tamano real del meme y clip.
          El meme siempre ocupa mas espacio que el clip (min 55%, max 75%).
          Caption superpuesto en la frontera meme/video (opcional).
@@ -54,6 +54,9 @@ FPS = 30
 # Layout limits: el meme siempre ocupa mas que el clip
 MEME_MIN_RATIO = 0.55  # Minimo 55% del alto para el meme
 MEME_MAX_RATIO = 0.75  # Maximo 75% del alto para el meme
+
+# Background color (where image/clip doesn't fill)
+BG_COLOR = (255, 255, 255)  # Blanco
 
 # Font config
 STROKE_WIDTH = 4
@@ -125,24 +128,22 @@ def find_font():
 def fit_image_to_area(img, area_width, area_height):
     """
     Escala la imagen para que quepa COMPLETA dentro del area (sin crop).
-    Retorna imagen con fondo negro del tamano exacto del area.
+    Retorna imagen con fondo blanco del tamano exacto del area.
     """
     img_ratio = img.width / img.height
     area_ratio = area_width / area_height
 
     if img_ratio > area_ratio:
-        # Imagen mas ancha que el area: limitar por ancho
         new_w = area_width
         new_h = int(area_width / img_ratio)
     else:
-        # Imagen mas alta que el area: limitar por alto
         new_h = area_height
         new_w = int(area_height * img_ratio)
 
     img = img.resize((new_w, new_h), Image.LANCZOS)
 
-    # Centrar sobre fondo negro
-    canvas = Image.new("RGB", (area_width, area_height), (0, 0, 0))
+    # Centrar sobre fondo blanco
+    canvas = Image.new("RGB", (area_width, area_height), BG_COLOR)
     x = (area_width - new_w) // 2
     y = (area_height - new_h) // 2
     canvas.paste(img, (x, y))
@@ -154,20 +155,11 @@ def calculate_layout(meme_path, clip_size):
     Calcula el split dinamico entre meme y clip basado en sus dimensiones reales.
     Ambos se muestran completos (fit, no crop).
     El meme siempre ocupa entre MEME_MIN_RATIO y MEME_MAX_RATIO del alto total.
-
-    Args:
-        meme_path: Path a la imagen del meme
-        clip_size: tupla (width, height) del clip de video
-
-    Returns:
-        (meme_area_height, clip_area_height) en pixeles
     """
-    # Calcular altura natural del meme si lo fiteamos al ancho completo
     meme_img = Image.open(meme_path)
     meme_ratio = meme_img.width / meme_img.height
     meme_natural_h = int(VIDEO_WIDTH / meme_ratio)
 
-    # Calcular altura natural del clip si lo fiteamos al ancho completo
     clip_w, clip_h = clip_size
     clip_ratio = clip_w / clip_h
     clip_natural_h = int(VIDEO_WIDTH / clip_ratio)
@@ -175,11 +167,9 @@ def calculate_layout(meme_path, clip_size):
     total_needed = meme_natural_h + clip_natural_h
 
     if total_needed <= VIDEO_HEIGHT:
-        # Ambos caben, distribuir espacio sobrante
         meme_area_h = meme_natural_h + (VIDEO_HEIGHT - total_needed) // 2
         clip_area_h = VIDEO_HEIGHT - meme_area_h
     else:
-        # No caben juntos: escalar proporcionalmente
         scale = VIDEO_HEIGHT / total_needed
         meme_area_h = int(meme_natural_h * scale)
         clip_area_h = VIDEO_HEIGHT - meme_area_h
@@ -360,7 +350,7 @@ def generate_video(meme_path, clip_path, music_path, caption_text, caption_size,
     clip_pct = (clip_area_h / VIDEO_HEIGHT) * 100
     print(f"   Layout dinamico: meme={meme_area_h}px ({meme_pct:.0f}%) | clip={clip_area_h}px ({clip_pct:.0f}%)")
 
-    # Preparar meme (fit completo, sin crop, fondo negro)
+    # Preparar meme (fit completo, sin crop, fondo blanco)
     print("   Procesando meme...")
     meme_img = Image.open(meme_path).convert("RGB")
     meme_fitted = fit_image_to_area(meme_img, VIDEO_WIDTH, meme_area_h)
@@ -379,7 +369,7 @@ def generate_video(meme_path, clip_path, music_path, caption_text, caption_size,
     # Recortar clip a duracion
     video_clip = video_clip.subclipped(0, min(duration, video_clip.duration - 0.01))
 
-    # Procesar frames del clip: fit completo dentro del area, fondo negro
+    # Procesar frames del clip: fit completo dentro del area, fondo blanco
     def process_frame(frame):
         img = Image.fromarray(frame)
         fitted = fit_image_to_area(img, VIDEO_WIDTH, clip_area_h)
