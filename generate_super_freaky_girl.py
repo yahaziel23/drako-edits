@@ -138,7 +138,7 @@ def find_letter_image(letter):
             candidates.append(img_path)
     
     if not candidates:
-        print(f"   \u26a0\ufe0f  No se encontro imagen para la letra '{letter}'")
+        print(f"   [!] No se encontro imagen para la letra '{letter}'")
         return None
     
     return random.choice(candidates)
@@ -148,7 +148,7 @@ def get_sequence_images(sequence_name):
     """Obtiene las imagenes de una secuencia (modo characters)."""
     seq_dir = SEQUENCES_DIR / sequence_name
     if not seq_dir.exists():
-        print(f"   \u26a0\ufe0f  Secuencia '{sequence_name}' no encontrada en {SEQUENCES_DIR}")
+        print(f"   [!] Secuencia '{sequence_name}' no encontrada en {SEQUENCES_DIR}")
         return []
     return get_images_from_dir(seq_dir)
 
@@ -228,20 +228,20 @@ def generate_video(name, mode="letters", caption="Cuando se llama...",
         output_name: Nombre del archivo de salida (sin extension)
     """
     print(f"\n{'='*50}")
-    print(f"   SUPER FREAKY GIRL \u2014 {name.upper()}")
+    print(f"   SUPER FREAKY GIRL -- {name.upper()}")
     print(f"   Modo: {mode} | Intro: {intro_theme}")
     print(f"   Caption: \"{caption}\"")
     print(f"{'='*50}")
 
     # --- Validaciones ---
     if not AUDIO_PATH.exists():
-        print(f"   \u274c Audio no encontrado: {AUDIO_PATH}")
+        print(f"   [X] Audio no encontrado: {AUDIO_PATH}")
         return None
 
     intro_path = INTRO_DIR / intro_theme
     intro_images = get_images_from_dir(intro_path)
     if len(intro_images) < 1:
-        print(f"   \u274c No hay imagenes en intro/{intro_theme}/")
+        print(f"   [X] No hay imagenes en intro/{intro_theme}/")
         return None
 
     # --- Preparar imagenes de spelling segun modo ---
@@ -252,13 +252,13 @@ def generate_video(name, mode="letters", caption="Cuando se llama...",
         for letter in name_upper:
             img_path = find_letter_image(letter)
             if img_path is None:
-                print(f"   \u274c Falta letra '{letter}'. Abortando.")
+                print(f"   [X] Falta letra '{letter}'. Abortando.")
                 return None
             spelling_images.append(img_path)
 
     elif mode == "characters":
         if not sequence_name:
-            print(f"   \u274c Modo 'characters' requiere --sequence")
+            print(f"   [X] Modo 'characters' requiere --sequence")
             return None
         seq_imgs = get_sequence_images(sequence_name)
         if not seq_imgs:
@@ -269,7 +269,7 @@ def generate_video(name, mode="letters", caption="Cuando se llama...",
         for letter in name_upper:
             img_path = find_letter_image(letter)
             if img_path is None:
-                print(f"   \u274c Falta letra '{letter}'. Abortando.")
+                print(f"   [X] Falta letra '{letter}'. Abortando.")
                 return None
             spelling_images.append(img_path)
 
@@ -360,7 +360,7 @@ def generate_video(name, mode="letters", caption="Cuando se llama...",
     audio_clip.close()
 
     size_mb = output_path.stat().st_size / (1024 * 1024)
-    print(f"\n   \u2705 Listo: {output_path.name} ({size_mb:.1f} MB)")
+    print(f"\n   [OK] Listo: {output_path.name} ({size_mb:.1f} MB)")
     return output_path
 
 
@@ -376,11 +376,11 @@ def generate_batch(file_path, mode="letters", caption="Cuando se llama...",
     """
     file_path = Path(file_path)
     if not file_path.exists():
-        print(f"\u274c Archivo de lote no encontrado: {file_path}")
+        print(f"[X] Archivo de lote no encontrado: {file_path}")
         return
 
     names = [line.strip() for line in file_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    print(f"\n\ud83d\udccb Generando {len(names)} videos en lote...")
+    print(f"\n[BATCH] Generando {len(names)} videos en lote...")
     print(f"   Modo: {mode} | Tema: {intro_theme}")
     print(f"   Caption: \"{caption}\"")
 
@@ -440,17 +440,17 @@ Ejemplos:
     # Validar que hay input
     if not args.name and not args.batch:
         parser.print_help()
-        print("\n\u274c Necesitas --name o --batch")
+        print("\n[X] Necesitas --name o --batch")
         sys.exit(1)
 
     # Header
-    print("\n\ud83c\udfb5 Drako Edits \u2014 Super Freaky Girl Generator")
+    print("\n>>> Drako Edits -- Super Freaky Girl Generator")
     print(f"   Assets: {ASSETS_DIR}")
     print(f"   Output: {OUTPUT_DIR}")
 
     # Verificar assets basicos
     if not AUDIO_PATH.exists():
-        print(f"\n\u274c Audio no encontrado: {AUDIO_PATH}")
+        print(f"\n[X] Audio no encontrado: {AUDIO_PATH}")
         print(f"   Pon el archivo 'super_freaky_girl.mp3' en assets/super_freaky_girl/audio/")
         sys.exit(1)
 
@@ -472,7 +472,7 @@ Ejemplos:
             output_name=args.output
         )
 
-    print("\n\ud83c\udfac Done!")
+    print("\n>>> Done!")
 
 
 if __name__ == "__main__":
