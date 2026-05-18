@@ -25,9 +25,9 @@ Formato del JSON:
         "background": "blur",
         "fill_mode": "cover",
         "segments": [
-            {"end": 3.5, "video": "clip1.mp4", "subtitle": "Texto..."},
-            {"end": 7.0, "video": "clip2.mp4", "subtitle": "same"},
-            {"end": "ultimo", "video": "clip3.mp4", "subtitle": null}
+            {"end": 3.5, "video": "clip1.mp4", "video_start": 0, "subtitle": "Texto..."},
+            {"end": 7.0, "video": "clip2.mp4", "video_start": 2.5, "subtitle": "same"},
+            {"end": "ultimo", "video": "clip3.mp4", "video_start": 0, "subtitle": null}
         ]
     }
 
@@ -35,6 +35,7 @@ Formato del JSON:
     - "background": "white", "black", o "blur" (frame del video borroso de fondo)
     - "fill_mode": "cover" (cubre todo, puede cortar) o "fit" (completo, con fondo)
     - "video": nombre del archivo de video en la carpeta videos/
+    - "video_start": segundo donde empieza el clip (default 0)
     - "subtitle": texto, "same" (mismo que anterior), o null (sin subtitulo)
     - "subtitle": usa | para salto de linea (ej. "hola|mundo" -> dos lineas)
     - "subtitle": usa ^ al inicio para subir o v para bajar (ej. "^^texto" sube 2 pasos)
@@ -42,6 +43,7 @@ Formato del JSON:
 
 Nota: Solo se muestran videos cuya duracion sea >= la duracion del segmento.
       El video se recorta automaticamente al final del segmento.
+      Puedes elegir desde que segundo empieza el video (gap = duracion_video - duracion_segmento).
 """
 
 import os
@@ -391,17 +393,57 @@ def show_eligible_videos(segment_duration):
 
     print(f"\n   Videos elegibles (duracion >= {format_time(segment_duration)}):")
     for i, (v, dur) in enumerate(eligible, 1):
-        print(f"      {i}. {v.name} ({format_time(dur)})")
+        gap = dur - segment_duration
+        print(f"      {i}. {v.name} ({format_time(dur)}) [gap: {format_time(gap)}]")
 
     return eligible
 
 
+def ask_video_start(video_path, segment_duration):
+    """
+    Pregunta desde que segundo empieza el video.
+    Gap = duracion_video - duracion_segmento.
+    Retorna el segundo de inicio (float).
+    """
+    vid_dur = get_cached_duration(video_path)
+    gap = vid_dur - segment_duration
+
+    if gap <= 0.01:
+        # No hay gap, empieza desde 0 obligatoriamente
+        print(f"   (Sin gap, empieza desde 0)")
+        return 0.0
+
+    print(f"   Gap disponible: {format_time(gap)} (puedes empezar desde 0 hasta {format_time(gap)})")
+    while True:
+        start_input = input(f"   Desde que segundo empieza el video? (Enter=0): ").strip()
+
+        if not start_input:
+            return 0.0
+
+        try:
+            start = float(start_input)
+        except ValueError:
+            print("   [!] Numero no valido.")
+            continue
+
+        if start < 0:
+            print("   [!] No puede ser negativo.")
+            continue
+
+        if start > gap:
+            print(f"   [!] Maximo es {format_time(gap)} (si no, el video no alcanza para el segmento).")
+            continue
+
+        print(f"   -> Empieza en: {format_time(start)}")
+        return start
+
+
 def ask_video(segment_duration, previous_video):
-    """Pregunta el video para este segmento. Retorna (Path, raw_input_string)."""
+    """Pregunta el video para este segmento. Retorna (Path, raw_input_string, video_start)."""
     eligible = show_eligible_videos(segment_duration)
 
     if eligible is None:
-        return None, None
+        return None, None, 0.0
 
     prompt = "   Video"
     if previous_video:
@@ -420,7 +462,8 @@ def ask_video(segment_duration, previous_video):
             prev_dur = get_cached_duration(previous_video)
             if prev_dur and prev_dur >= segment_duration:
                 print(f"   -> Usando mismo: {previous_video.name}")
-                return previous_video, "same"
+                video_start = ask_video_start(previous_video, segment_duration)
+                return previous_video, "same", video_start
             else:
                 print(f"   [!] El video anterior ({previous_video.name}) es mas corto que este segmento.")
                 continue
@@ -431,7 +474,8 @@ def ask_video(segment_duration, previous_video):
             if 0 <= idx < len(eligible):
                 chosen = eligible[idx][0]
                 print(f"   -> Video: {chosen.name}")
-                return chosen, chosen.name
+                video_start = ask_video_start(chosen, segment_duration)
+                return chosen, chosen.name, video_start
             print("   [!] Numero fuera de rango.")
             continue
 
@@ -439,7 +483,8 @@ def ask_video(segment_duration, previous_video):
         for v, dur in eligible:
             if v.stem.lower() == vid_input.lower() or v.name.lower() == vid_input.lower():
                 print(f"   -> Video: {v.name}")
-                return v, v.name
+                video_start = ask_video_start(v, segment_duration)
+                return v, v.name, video_start
 
         print(f"   [!] No se encontro '{vid_input}' entre los elegibles.")
 
@@ -480,6 +525,7 @@ def ask_cuts(audio_duration):
     print(f"   Para video/subtitulo: 'misma'/'mismo' repite el anterior.")
     print(f"   Solo se muestran videos cuya duracion >= la del segmento.")
     print(f"   El video se corta automaticamente al final del tramo.")
+    print(f"   Puedes elegir desde que segundo empieza cada video (gap).")
     print(f"   En subtitulos: | = salto de linea, ^ = subir, v = bajar.")
 
     cut_num = 1
@@ -501,7 +547,7 @@ def ask_cuts(audio_duration):
             segment_duration = end_time - last_cut
             print(f"   Tramo: {last_cut:.3f}s -> {end_time:.3f}s (duracion: {format_time(segment_duration)})")
 
-            vid_path, vid_input_raw = ask_video(segment_duration, previous_video)
+            vid_path, vid_input_raw, video_start = ask_video(segment_duration, previous_video)
             if vid_path is None:
                 continue
 
@@ -511,11 +557,13 @@ def ask_cuts(audio_duration):
                 "start": last_cut,
                 "end": end_time,
                 "video_path": vid_path,
+                "video_start": video_start,
                 "subtitle": subtitle
             })
             json_segments.append({
                 "end": "ultimo",
                 "video": vid_input_raw,
+                "video_start": video_start,
                 "subtitle": sub_input_raw
             })
             print(f"   [OK] Tramo final guardado.")
@@ -538,7 +586,7 @@ def ask_cuts(audio_duration):
         segment_duration = cut_time - last_cut
         print(f"   Tramo: {last_cut:.3f}s -> {cut_time:.3f}s (duracion: {format_time(segment_duration)})")
 
-        vid_path, vid_input_raw = ask_video(segment_duration, previous_video)
+        vid_path, vid_input_raw, video_start = ask_video(segment_duration, previous_video)
         if vid_path is None:
             continue
 
@@ -548,11 +596,13 @@ def ask_cuts(audio_duration):
             "start": last_cut,
             "end": cut_time,
             "video_path": vid_path,
+            "video_start": video_start,
             "subtitle": subtitle
         })
         json_segments.append({
             "end": cut_time,
             "video": vid_input_raw,
+            "video_start": video_start,
             "subtitle": sub_input_raw
         })
 
@@ -616,6 +666,8 @@ def load_from_json(json_path):
             print(f"   [X] Segmento {i+1}: video no encontrado '{vid_raw}'")
             sys.exit(1)
 
+        video_start = float(seg_config.get("video_start", 0))
+
         sub_raw = seg_config.get("subtitle")
         if sub_raw and str(sub_raw).lower() == "same":
             # Buscar subtitle anterior
@@ -629,6 +681,7 @@ def load_from_json(json_path):
             "start": last_cut,
             "end": end_time,
             "video_path": vid_path,
+            "video_start": video_start,
             "subtitle": subtitle
         })
 
@@ -693,16 +746,19 @@ def generate_video(audio_path, segments, total_duration, output_name, fill_mode=
         if seg_duration <= 0:
             continue
         vid_path = seg["video_path"]
+        video_start = seg.get("video_start", 0)
         subtitle = seg["subtitle"]
 
-        print(f"   Segmento {i+1}: {start:.3f}s -> {end:.3f}s | video: {vid_path.name} | sub: {subtitle or '(sin)'}")
+        print(f"   Segmento {i+1}: {start:.3f}s -> {end:.3f}s | video: {vid_path.name} [desde {format_time(video_start)}] | sub: {subtitle or '(sin)'}")
 
-        # Cargar clip de video y recortar a la duracion del segmento
+        # Cargar clip de video y recortar segun video_start + duracion del segmento
         src_clip = VideoFileClip(str(vid_path))
         src_clips.append(src_clip)  # No cerrar aqui, cerrar al final
-        # El video es mas largo que el segmento, recortar al final del tramo
-        clip_end = min(seg_duration, src_clip.duration - 0.01)
-        src_clip = src_clip.subclipped(0, clip_end)
+
+        # Recortar: desde video_start hasta video_start + seg_duration
+        clip_start = video_start
+        clip_end = min(video_start + seg_duration, src_clip.duration - 0.01)
+        src_clip = src_clip.subclipped(clip_start, clip_end)
 
         # Procesar frames segun fill_mode y background
         def make_frame_processor(fm, bg):
@@ -829,7 +885,9 @@ Ejemplos:
     print(f"{'='*50}")
     print(f"   Modo: {fill_mode} | Fondo: {background}")
     for i, seg in enumerate(segments, 1):
-        print(f"   {i}. [{seg['start']:.3f}s - {seg['end']:.3f}s] video: {seg['video_path'].name} | sub: {seg['subtitle'] or '(sin)'}")
+        vs = seg.get('video_start', 0)
+        vs_str = f" [desde {format_time(vs)}]" if vs > 0 else ""
+        print(f"   {i}. [{seg['start']:.3f}s - {seg['end']:.3f}s] video: {seg['video_path'].name}{vs_str} | sub: {seg['subtitle'] or '(sin)'}")
     print(f"   Duracion total: {total_duration:.3f}s")
 
     # Confirmar
