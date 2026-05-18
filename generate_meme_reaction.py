@@ -9,6 +9,7 @@ Formato: Imagen (meme) arriba + Video clip abajo
          El meme siempre ocupa mas espacio que el clip (min 65%, max 75%).
          Caption superpuesto en la frontera meme/video (opcional).
          Usa | para salto de linea en el caption.
+         Auto-detecta y remueve barras negras de los clips.
 
 Uso:
     python generate_meme_reaction.py
@@ -70,6 +71,10 @@ CAPTION_SIZES = {
     "XL": 110,
 }
 
+# Auto-crop config
+BLACK_BAR_THRESHOLD = 15  # Luminosidad promedio por fila para considerar "negro"
+BLACK_BAR_MIN_ROWS = 5   # Minimo de filas negras para considerar que hay barra
+
 
 # =============================================================================
 # FUNCIONES UTILITARIAS
@@ -124,6 +129,45 @@ def find_font():
         if Path(p).exists():
             return p
     return None
+
+
+def detect_black_bars(frame):
+    """
+    Detecta barras negras arriba y abajo de un frame.
+    Analiza el promedio de luminosidad por fila.
+    Retorna (top_crop, bottom_crop) = pixeles a recortar.
+    """
+    # Convertir a grayscale para analizar luminosidad
+    if len(frame.shape) == 3:
+        gray = np.mean(frame, axis=2)  # Promedio RGB -> luminosidad
+    else:
+        gray = frame
+
+    height = gray.shape[0]
+
+    # Detectar barras desde arriba
+    top_crop = 0
+    for row in range(height):
+        if np.mean(gray[row]) < BLACK_BAR_THRESHOLD:
+            top_crop = row + 1
+        else:
+            break
+
+    # Detectar barras desde abajo
+    bottom_crop = 0
+    for row in range(height - 1, -1, -1):
+        if np.mean(gray[row]) < BLACK_BAR_THRESHOLD:
+            bottom_crop = height - row
+        else:
+            break
+
+    # Solo reportar si hay suficientes filas (evitar falsos positivos)
+    if top_crop < BLACK_BAR_MIN_ROWS:
+        top_crop = 0
+    if bottom_crop < BLACK_BAR_MIN_ROWS:
+        bottom_crop = 0
+
+    return top_crop, bottom_crop
 
 
 def fit_image_to_area(img, area_width, area_height):
@@ -350,7 +394,25 @@ def generate_video(meme_path, clip_path, music_path, caption_text, caption_size,
     # Cargar clip para obtener dimensiones
     print("\n   Cargando clip...")
     video_clip = VideoFileClip(str(clip_path))
-    clip_size = video_clip.size  # (width, height)
+
+    # Auto-detectar barras negras del primer frame
+    first_frame = video_clip.get_frame(0.1)
+    top_crop, bottom_crop = detect_black_bars(first_frame)
+
+    if top_crop > 0 or bottom_crop > 0:
+        orig_h = video_clip.size[1]
+        print(f"   [auto-crop] Barras negras detectadas: top={top_crop}px, bottom={bottom_crop}px")
+        # Aplicar crop con moviepy (x1, y1, x2, y2)
+        video_clip = video_clip.cropped(
+            x1=0,
+            y1=top_crop,
+            x2=video_clip.size[0],
+            y2=video_clip.size[1] - bottom_crop
+        )
+        new_h = video_clip.size[1]
+        print(f"   [auto-crop] Recortado: {orig_h}px -> {new_h}px")
+
+    clip_size = video_clip.size  # (width, height) ya sin barras
 
     # Calcular layout dinamico
     meme_area_h, clip_area_h = calculate_layout(meme_path, clip_size)
