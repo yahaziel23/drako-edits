@@ -684,6 +684,7 @@ def generate_video(audio_path, segments, total_duration, output_name, fill_mode=
     audio_clip = audio_clip.subclipped(0, total_duration)
 
     all_clips = []
+    src_clips = []  # Guardar refs para cerrar al final
 
     for i, seg in enumerate(segments):
         start = seg["start"]
@@ -698,6 +699,7 @@ def generate_video(audio_path, segments, total_duration, output_name, fill_mode=
 
         # Cargar clip de video y recortar a la duracion del segmento
         src_clip = VideoFileClip(str(vid_path))
+        src_clips.append(src_clip)  # No cerrar aqui, cerrar al final
         # El video es mas largo que el segmento, recortar al final del tramo
         clip_end = min(seg_duration, src_clip.duration - 0.01)
         src_clip = src_clip.subclipped(0, clip_end)
@@ -725,8 +727,6 @@ def generate_video(audio_path, segments, total_duration, output_name, fill_mode=
                             .with_duration(seg_duration))
                 all_clips.append(sub_clip)
 
-        src_clip.close()
-
     print(f"\n   Componiendo video...")
     final = CompositeVideoClip(all_clips, size=(VIDEO_WIDTH, VIDEO_HEIGHT))
     final = final.with_duration(total_duration).with_audio(audio_clip)
@@ -745,8 +745,14 @@ def generate_video(audio_path, segments, total_duration, output_name, fill_mode=
         logger=None
     )
 
+    # Cerrar todo en orden correcto (final primero, luego sources)
     final.close()
     audio_clip.close()
+    for sc in src_clips:
+        try:
+            sc.close()
+        except (OSError, Exception):
+            pass  # Ignorar WinError 6 en cleanup
 
     size_mb = output_path.stat().st_size / (1024 * 1024)
     print(f"\n   [OK] Listo: {output_path.name} ({size_mb:.1f} MB)")

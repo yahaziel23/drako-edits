@@ -1,0 +1,12 @@
+{
+  "audio": "adormirvivosolo.mp3",
+  "output_name": "adormirvivosolo",
+  "fill_mode": "cover",
+  "background": "black",
+  "segments": [
+    {"end": 1.989, "video": "1o.mp4", "subtitle": "Ya a dormir"},
+    {"end": 3.373, "video": "2.mp4", "subtitle": "*buenas noches*"},
+    {"end": 7.091, "video": "3.mp4", "subtitle": "Igual buenas noches...| | *Se dormía*"},
+    {"end": "ultimo", "video": "4.mp4", "subtitle": "No mms | | | yo vivo solo"}
+  ]
+}
