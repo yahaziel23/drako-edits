@@ -40,7 +40,7 @@ Formato del JSON:
     - "subtitle": usa ^ al inicio para subir o v para bajar (ej. "^^texto" sube 2 pasos)
     - "end": numero (timestamp) o "ultimo" (hasta el final del audio)
 
-Nota: Solo se muestran videos cuya duracion sea <= la duracion del segmento.
+Nota: Solo se muestran videos cuya duracion sea >= la duracion del segmento.
       El video se recorta automaticamente al final del segmento.
 """
 
@@ -372,24 +372,24 @@ def ask_audio():
 
 
 def show_eligible_videos(segment_duration):
-    """Muestra videos que caben en el segmento (duracion <= segment_duration)."""
+    """Muestra videos que duran >= el segmento (se cortaran al final del tramo)."""
     all_videos = get_videos_from_dir(VIDEOS_DIR)
     eligible = []
 
     for v in all_videos:
         dur = get_cached_duration(v)
-        if dur is not None and dur <= segment_duration:
+        if dur is not None and dur >= segment_duration:
             eligible.append((v, dur))
 
     if not eligible:
-        print(f"\n   [!] No hay videos con duracion <= {format_time(segment_duration)}")
-        print(f"   Videos disponibles (todos exceden el segmento):")
+        print(f"\n   [!] No hay videos con duracion >= {format_time(segment_duration)}")
+        print(f"   Videos disponibles (todos son mas cortos que el segmento):")
         for v in all_videos:
             dur = get_cached_duration(v)
             print(f"      - {v.name} ({format_time(dur) if dur else '???'})")
         return None
 
-    print(f"\n   Videos elegibles (duracion <= {format_time(segment_duration)}):")
+    print(f"\n   Videos elegibles (duracion >= {format_time(segment_duration)}):")
     for i, (v, dur) in enumerate(eligible, 1):
         print(f"      {i}. {v.name} ({format_time(dur)})")
 
@@ -416,13 +416,13 @@ def ask_video(segment_duration, previous_video):
             continue
 
         if vid_input.lower() in ("misma", "mismo", "same") and previous_video:
-            # Verificar que el video anterior todavia cabe
+            # Verificar que el video anterior todavia cabe (dura >= segmento)
             prev_dur = get_cached_duration(previous_video)
-            if prev_dur and prev_dur <= segment_duration:
+            if prev_dur and prev_dur >= segment_duration:
                 print(f"   -> Usando mismo: {previous_video.name}")
                 return previous_video, "same"
             else:
-                print(f"   [!] El video anterior ({previous_video.name}) no cabe en este segmento.")
+                print(f"   [!] El video anterior ({previous_video.name}) es mas corto que este segmento.")
                 continue
 
         # Buscar por numero
@@ -478,7 +478,8 @@ def ask_cuts(audio_duration):
     print(f"      - 'ultimo' = tramo final hasta el fin del audio")
     print(f"      - 'final' = cortar audio en el ultimo corte dado")
     print(f"   Para video/subtitulo: 'misma'/'mismo' repite el anterior.")
-    print(f"   Solo se muestran videos cuya duracion <= la del segmento.")
+    print(f"   Solo se muestran videos cuya duracion >= la del segmento.")
+    print(f"   El video se corta automaticamente al final del tramo.")
     print(f"   En subtitulos: | = salto de linea, ^ = subir, v = bajar.")
 
     cut_num = 1
@@ -697,7 +698,7 @@ def generate_video(audio_path, segments, total_duration, output_name, fill_mode=
 
         # Cargar clip de video y recortar a la duracion del segmento
         src_clip = VideoFileClip(str(vid_path))
-        # Recortar el clip fuente a lo que dura el segmento (o lo que dure el clip si es menor)
+        # El video es mas largo que el segmento, recortar al final del tramo
         clip_end = min(seg_duration, src_clip.duration - 0.01)
         src_clip = src_clip.subclipped(0, clip_end)
 
@@ -708,24 +709,8 @@ def generate_video(audio_path, segments, total_duration, output_name, fill_mode=
             return process_frame
 
         processed = src_clip.image_transform(make_frame_processor(fill_mode, background))
-
-        # Si el clip es mas corto que el segmento, congelar ultimo frame
-        if clip_end < seg_duration:
-            # Extender con ultimo frame como imagen estatica
-            remaining = seg_duration - clip_end
-
-            # Obtener ultimo frame
-            last_frame = src_clip.get_frame(clip_end - 0.01)
-            last_frame_processed = process_video_frame(last_frame, fill_mode, background)
-            freeze_clip = (ImageClip(last_frame_processed)
-                          .with_duration(remaining)
-                          .with_start(start + clip_end))
-            processed = processed.with_start(start).with_duration(clip_end)
-            all_clips.append(processed)
-            all_clips.append(freeze_clip)
-        else:
-            processed = processed.with_start(start).with_duration(seg_duration)
-            all_clips.append(processed)
+        processed = processed.with_start(start).with_duration(seg_duration)
+        all_clips.append(processed)
 
         # Subtitle
         if subtitle:
