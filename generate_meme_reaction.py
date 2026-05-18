@@ -6,7 +6,7 @@ Drako Edits - Generador de Meme Reaction Videos
 Formato: Imagen (meme) arriba + Video clip abajo
          Sin crop: ambos se muestran completos con fondo blanco si sobra.
          El split se calcula dinamicamente segun el tamano real del meme y clip.
-         El meme siempre ocupa mas espacio que el clip (min 55%, max 75%).
+         El meme siempre ocupa mas espacio que el clip (min 65%, max 75%).
          Caption superpuesto en la frontera meme/video (opcional).
          Usa | para salto de linea en el caption.
 
@@ -53,7 +53,7 @@ VIDEO_HEIGHT = 1920
 FPS = 30
 
 # Layout limits: el meme siempre ocupa mas que el clip
-MEME_MIN_RATIO = 0.55  # Minimo 55% del alto para el meme
+MEME_MIN_RATIO = 0.65  # Minimo 65% del alto para el meme (clip max 35%)
 MEME_MAX_RATIO = 0.75  # Maximo 75% del alto para el meme
 
 # Background color (where image/clip doesn't fill)
@@ -175,7 +175,7 @@ def calculate_layout(meme_path, clip_size):
         meme_area_h = int(meme_natural_h * scale)
         clip_area_h = VIDEO_HEIGHT - meme_area_h
 
-    # Aplicar limites: meme siempre entre 55% y 75%
+    # Aplicar limites: meme siempre entre 65% y 75% (clip max 35%)
     min_meme_h = int(VIDEO_HEIGHT * MEME_MIN_RATIO)
     max_meme_h = int(VIDEO_HEIGHT * MEME_MAX_RATIO)
 
