@@ -127,11 +127,11 @@ tempCodeRunnerFile.py
 .pypirc
 
 # =============================================================================
-# DRAKO EDITS - Archivos pesados (imagenes, audio, videos)
+# DRAKO EDITS - Assets (imagenes, audio, videos de templates)
 # Las CARPETAS si se trackean (via .gitkeep), los archivos pesados NO
 # =============================================================================
 
-# Imagenes
+# Imagenes en assets
 assets/**/*.jpg
 assets/**/*.jpeg
 assets/**/*.png
@@ -139,17 +139,55 @@ assets/**/*.webp
 assets/**/*.bmp
 assets/**/*.gif
 
-# Audio
+# Audio en assets
 assets/**/*.mp3
 assets/**/*.wav
 assets/**/*.m4a
 assets/**/*.ogg
 
-# Videos generados
+# Videos generados (output de los generators)
 output/**/*.mp4
 output/**/*.avi
 output/**/*.mov
 output/**/*.mkv
+
+# =============================================================================
+# DRAKO EDITS - tools_output (descargas y ediciones)
+# Todo lo descargado/procesado es pesado y no va al repo
+# =============================================================================
+
+# Videos descargados y editados
+tools_output/**/*.mp4
+tools_output/**/*.mov
+tools_output/**/*.avi
+tools_output/**/*.mkv
+tools_output/**/*.webm
+
+# Audios descargados
+tools_output/**/*.mp3
+tools_output/**/*.wav
+tools_output/**/*.m4a
+tools_output/**/*.ogg
+
+# Posts de Instagram (fotos descargadas)
+tools_output/**/*.jpg
+tools_output/**/*.jpeg
+tools_output/**/*.png
+tools_output/**/*.webp
+
+# Metadata de instaloader
+tools_output/**/*.json
+tools_output/**/*.xz
+
+# =============================================================================
+# DRAKO EDITS - Instagram (sesiones, logs, credenciales)
+# =============================================================================
+
+# Sesiones de login (cookies)
+tools/instagram/.sessions/
+
+# Log de uso diario (tracker)
+tools/instagram/ig_usage_log.json
 
 # =============================================================================
 # YouTube API - Credenciales y logs (NUNCA subir al repo)

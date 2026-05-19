@@ -11,20 +11,30 @@ Formato: Imagen (meme) arriba + Video clip abajo
          Usa | para salto de linea en el caption.
          Auto-detecta y remueve barras negras de los clips.
 
+Fuentes de material:
+    - Imagenes: tools_output/posts/ (descargadas de IG)
+    - Videos:   tools_output/videos/ (descargados de YT)
+    - Audios:   tools_output/audios/ (descargados de YT)
+
+Configs (JSONs):
+    - assets/meme_reaction/configs/ (cada JSON = una combinacion reutilizable)
+
+Output:
+    - output/meme_reaction/
+
+Modos:
+    1. Desde JSON config (elige un JSON existente y genera)
+    2. Manual (elige imagen, clip, audio, caption interactivamente)
+       -> Opcion de guardar la combinacion como JSON para reutilizar
+
 Uso:
     python generate_meme_reaction.py
-
-Preparar antes:
-    - Imagenes en assets/meme_reaction/memes/
-    - Clips catalogados en assets/meme_reaction/clips/
-    - Audios en assets/meme_reaction/music/
+    python generate_meme_reaction.py --config "assets/meme_reaction/configs/meme01.json"
 """
 
 import sys
 import io
-import os
 import json
-import random
 import numpy as np
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
@@ -40,13 +50,16 @@ if sys.platform == "win32":
 # CONFIGURACION
 # =============================================================================
 
-SCRIPT_DIR = Path(__file__).parent
-ASSETS_DIR = SCRIPT_DIR / "assets" / "meme_reaction"
-CLIPS_DIR = ASSETS_DIR / "clips"
-MEMES_DIR = ASSETS_DIR / "memes"
-MUSIC_DIR = ASSETS_DIR / "music"
+SCRIPT_DIR = Path(__file__).parent  # raiz del proyecto
+
+# Fuentes de material (tools_output)
+IMAGES_DIR = SCRIPT_DIR / "tools_output" / "posts"
+VIDEOS_DIR = SCRIPT_DIR / "tools_output" / "videos"
+AUDIOS_DIR = SCRIPT_DIR / "tools_output" / "audios"
+
+# Configs y output
+CONFIGS_DIR = SCRIPT_DIR / "assets" / "meme_reaction" / "configs"
 OUTPUT_DIR = SCRIPT_DIR / "output" / "meme_reaction"
-INDEX_FILE = ASSETS_DIR / "clips_index.json"
 
 # Video config
 VIDEO_WIDTH = 1080
@@ -54,16 +67,14 @@ VIDEO_HEIGHT = 1920
 FPS = 30
 
 # Layout limits: el meme siempre ocupa mas que el clip
-MEME_MIN_RATIO = 0.65  # Minimo 65% del alto para el meme (clip max 35%)
-MEME_MAX_RATIO = 0.75  # Maximo 75% del alto para el meme
+MEME_MIN_RATIO = 0.65
+MEME_MAX_RATIO = 0.75
 
-# Background color (where image/clip doesn't fill)
-BG_COLOR = (255, 255, 255)  # Blanco
+# Background color
+BG_COLOR = (255, 255, 255)
 
 # Font config
 STROKE_WIDTH = 4
-
-# Caption font size options
 CAPTION_SIZES = {
     "S": 45,
     "M": 65,
@@ -72,20 +83,20 @@ CAPTION_SIZES = {
 }
 
 # Auto-crop config
-BLACK_BAR_THRESHOLD = 15  # Luminosidad promedio por fila para considerar "negro"
-BLACK_BAR_MIN_ROWS = 5   # Minimo de filas negras para considerar que hay barra
+BLACK_BAR_THRESHOLD = 15
+BLACK_BAR_MIN_ROWS = 5
 
 
 # =============================================================================
 # FUNCIONES UTILITARIAS
 # =============================================================================
 
-def get_images_from_dir(directory):
-    """Obtiene todas las imagenes de un directorio."""
+def get_images_recursive(directory):
+    """Obtiene todas las imagenes de un directorio (recursivo)."""
     extensions = {'.jpg', '.jpeg', '.png', '.webp', '.bmp'}
     if not directory.exists():
         return []
-    imgs = [f for f in directory.iterdir() if f.suffix.lower() in extensions]
+    imgs = [f for f in directory.rglob("*") if f.suffix.lower() in extensions]
     return sorted(imgs)
 
 
@@ -107,11 +118,11 @@ def get_audio_files(directory):
     return sorted(auds)
 
 
-def load_clips_index():
-    """Carga el indice de clips catalogados."""
-    if INDEX_FILE.exists():
-        return json.loads(INDEX_FILE.read_text(encoding="utf-8"))
-    return []
+def get_configs():
+    """Obtiene todos los JSON configs disponibles."""
+    if not CONFIGS_DIR.exists():
+        return []
+    return sorted(CONFIGS_DIR.glob("*.json"))
 
 
 def find_font():
@@ -132,20 +143,14 @@ def find_font():
 
 
 def detect_black_bars(frame):
-    """
-    Detecta barras negras arriba y abajo de un frame.
-    Analiza el promedio de luminosidad por fila.
-    Retorna (top_crop, bottom_crop) = pixeles a recortar.
-    """
-    # Convertir a grayscale para analizar luminosidad
+    """Detecta barras negras arriba y abajo de un frame."""
     if len(frame.shape) == 3:
-        gray = np.mean(frame, axis=2)  # Promedio RGB -> luminosidad
+        gray = np.mean(frame, axis=2)
     else:
         gray = frame
 
     height = gray.shape[0]
 
-    # Detectar barras desde arriba
     top_crop = 0
     for row in range(height):
         if np.mean(gray[row]) < BLACK_BAR_THRESHOLD:
@@ -153,7 +158,6 @@ def detect_black_bars(frame):
         else:
             break
 
-    # Detectar barras desde abajo
     bottom_crop = 0
     for row in range(height - 1, -1, -1):
         if np.mean(gray[row]) < BLACK_BAR_THRESHOLD:
@@ -161,7 +165,6 @@ def detect_black_bars(frame):
         else:
             break
 
-    # Solo reportar si hay suficientes filas (evitar falsos positivos)
     if top_crop < BLACK_BAR_MIN_ROWS:
         top_crop = 0
     if bottom_crop < BLACK_BAR_MIN_ROWS:
@@ -171,10 +174,7 @@ def detect_black_bars(frame):
 
 
 def fit_image_to_area(img, area_width, area_height):
-    """
-    Escala la imagen para que quepa COMPLETA dentro del area (sin crop).
-    Retorna imagen con fondo blanco del tamano exacto del area.
-    """
+    """Escala imagen para que quepa completa (fit, no crop). Fondo blanco."""
     img_ratio = img.width / img.height
     area_ratio = area_width / area_height
 
@@ -187,7 +187,6 @@ def fit_image_to_area(img, area_width, area_height):
 
     img = img.resize((new_w, new_h), Image.LANCZOS)
 
-    # Centrar sobre fondo blanco
     canvas = Image.new("RGB", (area_width, area_height), BG_COLOR)
     x = (area_width - new_w) // 2
     y = (area_height - new_h) // 2
@@ -196,11 +195,7 @@ def fit_image_to_area(img, area_width, area_height):
 
 
 def calculate_layout(meme_path, clip_size):
-    """
-    Calcula el split dinamico entre meme y clip basado en sus dimensiones reales.
-    Ambos se muestran completos (fit, no crop).
-    El meme siempre ocupa entre MEME_MIN_RATIO y MEME_MAX_RATIO del alto total.
-    """
+    """Calcula split dinamico meme/clip."""
     meme_img = Image.open(meme_path)
     meme_ratio = meme_img.width / meme_img.height
     meme_natural_h = int(VIDEO_WIDTH / meme_ratio)
@@ -219,7 +214,6 @@ def calculate_layout(meme_path, clip_size):
         meme_area_h = int(meme_natural_h * scale)
         clip_area_h = VIDEO_HEIGHT - meme_area_h
 
-    # Aplicar limites: meme siempre entre 65% y 75% (clip max 35%)
     min_meme_h = int(VIDEO_HEIGHT * MEME_MIN_RATIO)
     max_meme_h = int(VIDEO_HEIGHT * MEME_MAX_RATIO)
 
@@ -234,11 +228,7 @@ def calculate_layout(meme_path, clip_size):
 
 
 def render_caption(text, font_path, font_size):
-    """
-    Renderiza caption con stroke negro. Soporta multilinea (usa | como salto).
-    Retorna numpy array RGBA.
-    """
-    # Reemplazar | por salto de linea real
+    """Renderiza caption con stroke. Usa | como salto de linea."""
     text = text.replace("|", "\n")
 
     try:
@@ -264,96 +254,113 @@ def render_caption(text, font_path, font_size):
 
 
 # =============================================================================
+# JSON CONFIG
+# =============================================================================
+
+def load_config(config_path):
+    """Carga un JSON config y retorna dict con paths resueltos."""
+    config = json.loads(Path(config_path).read_text(encoding="utf-8"))
+
+    # Resolver paths relativos a la raiz del proyecto
+    resolved = {
+        "name": config.get("name", Path(config_path).stem),
+        "meme": SCRIPT_DIR / config["meme"],
+        "clip": SCRIPT_DIR / config["clip"],
+        "music": SCRIPT_DIR / config["music"] if config.get("music") else None,
+        "caption": config.get("caption", None),
+        "caption_size": config.get("caption_size", "M"),
+    }
+
+    return resolved
+
+
+def save_config(name, meme_path, clip_path, music_path, caption_text, caption_size_key):
+    """Guarda la combinacion actual como JSON config para reutilizar."""
+    CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Guardar paths relativos a la raiz
+    config = {
+        "name": name,
+        "meme": str(meme_path.relative_to(SCRIPT_DIR)),
+        "clip": str(clip_path.relative_to(SCRIPT_DIR)),
+        "music": str(music_path.relative_to(SCRIPT_DIR)) if music_path else None,
+        "caption": caption_text,
+        "caption_size": caption_size_key,
+    }
+
+    # Nombre del archivo JSON
+    safe_name = name.replace(" ", "_").lower()
+    config_file = CONFIGS_DIR / f"{safe_name}.json"
+
+    config_file.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"   [OK] Config guardado: {config_file.relative_to(SCRIPT_DIR)}")
+    return config_file
+
+
+# =============================================================================
 # SELECCION INTERACTIVA
 # =============================================================================
 
-def select_meme():
-    """Muestra memes disponibles y deja elegir."""
-    memes = get_images_from_dir(MEMES_DIR)
-    if not memes:
-        print(f"\n   [X] No hay memes en {MEMES_DIR}")
+def select_image():
+    """Muestra imagenes disponibles en tools_output/posts/ y deja elegir."""
+    images = get_images_recursive(IMAGES_DIR)
+    if not images:
+        print(f"\n   [X] No hay imagenes en {IMAGES_DIR}")
+        print(f"       Descarga posts con: python tools/instagram/posts_nologin.py")
         sys.exit(1)
 
-    print("\n   Memes disponibles:")
-    for i, m in enumerate(memes, 1):
-        print(f"      {i}. {m.name}")
+    print(f"\n   Imagenes disponibles ({len(images)}):")
+    for i, img in enumerate(images, 1):
+        # Mostrar path relativo a posts/ para que se vea de que perfil es
+        rel = img.relative_to(IMAGES_DIR)
+        print(f"      {i}. {rel}")
 
     while True:
-        choice = input("\n   Meme (numero o nombre): ").strip()
+        choice = input("\n   Imagen (numero): ").strip()
         if choice.isdigit():
             idx = int(choice) - 1
-            if 0 <= idx < len(memes):
-                return memes[idx]
-        else:
-            for m in memes:
-                if m.stem.lower() == choice.lower() or m.name.lower() == choice.lower():
-                    return m
-        print("   [!] No valido, intenta de nuevo.")
+            if 0 <= idx < len(images):
+                return images[idx]
+        print("   [!] No valido.")
 
 
 def select_clip():
-    """Muestra clips disponibles (del indice o directorio) y deja elegir."""
-    index = load_clips_index()
+    """Muestra videos disponibles en tools_output/videos/ y deja elegir."""
+    clips = get_videos_from_dir(VIDEOS_DIR)
+    if not clips:
+        print(f"\n   [X] No hay videos en {VIDEOS_DIR}")
+        print(f"       Descarga clips con: python tools/youtube/download_video_yt.py")
+        sys.exit(1)
 
-    if index:
-        print("\n   Clips catalogados:")
-        for i, entry in enumerate(index, 1):
-            name = entry.get("name", entry.get("file", "???"))
-            duration = entry.get("duration", "?")
-            desc = entry.get("description", "")
-            print(f"      {i}. {name} ({duration}s) {desc}")
+    print(f"\n   Clips disponibles ({len(clips)}):")
+    for i, c in enumerate(clips, 1):
+        print(f"      {i}. {c.name}")
 
-        while True:
-            choice = input("\n   Clip (numero): ").strip()
-            if choice.isdigit():
-                idx = int(choice) - 1
-                if 0 <= idx < len(index):
-                    entry = index[idx]
-                    clip_file = entry.get("file", entry.get("name", ""))
-                    clip_path = CLIPS_DIR / clip_file
-                    if clip_path.exists():
-                        return clip_path
-                    print(f"   [!] Archivo no encontrado: {clip_path}")
-            print("   [!] No valido.")
-    else:
-        clips = get_videos_from_dir(CLIPS_DIR)
-        if not clips:
-            print(f"\n   [X] No hay clips en {CLIPS_DIR}")
-            sys.exit(1)
-
-        print("\n   Clips disponibles:")
-        for i, c in enumerate(clips, 1):
-            print(f"      {i}. {c.name}")
-
-        while True:
-            choice = input("\n   Clip (numero o nombre): ").strip()
-            if choice.isdigit():
-                idx = int(choice) - 1
-                if 0 <= idx < len(clips):
-                    return clips[idx]
-            else:
-                for c in clips:
-                    if c.stem.lower() == choice.lower() or c.name.lower() == choice.lower():
-                        return c
-            print("   [!] No valido.")
+    while True:
+        choice = input("\n   Clip (numero): ").strip()
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(clips):
+                return clips[idx]
+        print("   [!] No valido.")
 
 
 def select_music():
-    """Muestra audios disponibles y deja elegir."""
-    music_files = get_audio_files(MUSIC_DIR)
+    """Muestra audios disponibles en tools_output/audios/ y deja elegir."""
+    music_files = get_audio_files(AUDIOS_DIR)
 
     if not music_files:
-        print(f"\n   [!] No hay audios en {MUSIC_DIR}. Continuando sin musica.")
+        print(f"\n   [!] No hay audios en {AUDIOS_DIR}. Usando audio del clip.")
         return None
 
-    print("\n   Musica disponible:")
+    print(f"\n   Musica disponible ({len(music_files)}):")
     print(f"      0. (Sin musica - usar audio del clip)")
     for i, m in enumerate(music_files, 1):
         print(f"      {i}. {m.name}")
 
     while True:
         choice = input("\n   Musica (numero, 0=sin musica): ").strip()
-        if choice == "0" or choice.lower() in ("sin", "none", "no"):
+        if choice == "0" or choice.lower() in ("sin", "none", "no", ""):
             return None
         if choice.isdigit():
             idx = int(choice) - 1
@@ -363,7 +370,7 @@ def select_music():
 
 
 def select_caption():
-    """Pregunta si quiere caption y su tamano."""
+    """Pregunta caption y tamano. Retorna (text, size_key)."""
     caption_input = input("\n   Caption (texto, | para salto de linea, Enter=sin): ").strip()
 
     if not caption_input:
@@ -374,59 +381,55 @@ def select_caption():
     if size not in CAPTION_SIZES:
         size = "M"
 
-    return caption_input, CAPTION_SIZES[size]
+    return caption_input, size
 
 
 # =============================================================================
 # GENERADOR
 # =============================================================================
 
-def generate_video(meme_path, clip_path, music_path, caption_text, caption_size, output_name=None):
+def generate_video(meme_path, clip_path, music_path, caption_text, caption_size_key, output_name=None):
     """Genera el video de meme reaction."""
+    caption_size = CAPTION_SIZES.get(caption_size_key, CAPTION_SIZES["M"]) if caption_size_key else None
+
     print(f"\n{'='*50}")
     print(f"   GENERANDO MEME REACTION")
-    print(f"   Meme: {meme_path.name}")
-    print(f"   Clip: {clip_path.name}")
-    print(f"   Musica: {music_path.name if music_path else '(audio del clip)'}")
-    print(f"   Caption: {caption_text or '(sin)'}")
+    print(f"   Meme:    {meme_path.name}")
+    print(f"   Clip:    {clip_path.name}")
+    print(f"   Musica:  {music_path.name if music_path else '(audio del clip)'}")
+    print(f"   Caption: {caption_text or '(sin)'} [{caption_size_key or '-'}]")
     print(f"{'='*50}")
 
-    # Cargar clip para obtener dimensiones
+    # Cargar clip
     print("\n   Cargando clip...")
     video_clip = VideoFileClip(str(clip_path))
 
-    # Auto-detectar barras negras del primer frame
+    # Auto-detectar barras negras
     first_frame = video_clip.get_frame(0.1)
     top_crop, bottom_crop = detect_black_bars(first_frame)
 
     if top_crop > 0 or bottom_crop > 0:
         orig_h = video_clip.size[1]
-        print(f"   [auto-crop] Barras negras detectadas: top={top_crop}px, bottom={bottom_crop}px")
-        # Aplicar crop con moviepy (x1, y1, x2, y2)
+        print(f"   [auto-crop] Barras: top={top_crop}px, bottom={bottom_crop}px")
         video_clip = video_clip.cropped(
-            x1=0,
-            y1=top_crop,
-            x2=video_clip.size[0],
-            y2=video_clip.size[1] - bottom_crop
+            x1=0, y1=top_crop,
+            x2=video_clip.size[0], y2=video_clip.size[1] - bottom_crop
         )
-        new_h = video_clip.size[1]
-        print(f"   [auto-crop] Recortado: {orig_h}px -> {new_h}px")
+        print(f"   [auto-crop] {orig_h}px -> {video_clip.size[1]}px")
 
-    clip_size = video_clip.size  # (width, height) ya sin barras
+    clip_size = video_clip.size
 
-    # Calcular layout dinamico
+    # Layout dinamico
     meme_area_h, clip_area_h = calculate_layout(meme_path, clip_size)
-    meme_pct = (meme_area_h / VIDEO_HEIGHT) * 100
-    clip_pct = (clip_area_h / VIDEO_HEIGHT) * 100
-    print(f"   Layout dinamico: meme={meme_area_h}px ({meme_pct:.0f}%) | clip={clip_area_h}px ({clip_pct:.0f}%)")
+    print(f"   Layout: meme={meme_area_h}px ({meme_area_h/VIDEO_HEIGHT*100:.0f}%) | clip={clip_area_h}px")
 
-    # Preparar meme (fit completo, sin crop, fondo blanco)
+    # Preparar meme
     print("   Procesando meme...")
     meme_img = Image.open(meme_path).convert("RGB")
     meme_fitted = fit_image_to_area(meme_img, VIDEO_WIDTH, meme_area_h)
     meme_array = np.array(meme_fitted)
 
-    # Determinar duracion
+    # Duracion
     if music_path:
         audio_clip = AudioFileClip(str(music_path))
         duration = min(video_clip.duration, audio_clip.duration)
@@ -434,43 +437,39 @@ def generate_video(meme_path, clip_path, music_path, caption_text, caption_size,
         audio_clip = None
         duration = video_clip.duration
 
-    print(f"   Duracion del video: {duration:.2f}s")
+    print(f"   Duracion: {duration:.2f}s")
 
-    # Recortar clip a duracion
     video_clip = video_clip.subclipped(0, min(duration, video_clip.duration - 0.01))
 
-    # Procesar frames del clip: fit completo dentro del area, fondo blanco
+    # Procesar frames del clip
     def process_frame(frame):
         img = Image.fromarray(frame)
         fitted = fit_image_to_area(img, VIDEO_WIDTH, clip_area_h)
         return np.array(fitted)
 
-    print("   Procesando frames del clip...")
+    print("   Procesando frames...")
     processed_clip = video_clip.image_transform(process_frame)
 
-    # Crear clip de meme (imagen estatica)
+    # Composicion
     meme_clip = ImageClip(meme_array).with_duration(duration)
-
-    # Posicionar: meme arriba, clip abajo
     meme_clip = meme_clip.with_position((0, 0))
     processed_clip = processed_clip.with_position((0, meme_area_h))
 
-    # Construir composicion
     layers = [meme_clip, processed_clip]
 
-    # Caption (en la frontera meme/clip)
+    # Caption
     if caption_text and caption_size:
         font_path = find_font()
         caption_img = render_caption(caption_text, font_path, caption_size)
         x_pos = max(0, (VIDEO_WIDTH - caption_img.shape[1]) // 2)
-        y_pos = meme_area_h - caption_img.shape[0] // 2  # Centrado en la frontera
-        cap_clip = (ImageClip(caption_img, transparent=True)
+        y_pos = meme_area_h - caption_img.shape[0] // 2
+        cap_clip = (ImageClip(caption_img)
                     .with_position((x_pos, y_pos))
                     .with_duration(duration))
         layers.append(cap_clip)
 
     # Componer
-    print("   Componiendo video...")
+    print("   Componiendo...")
     final = CompositeVideoClip(layers, size=(VIDEO_WIDTH, VIDEO_HEIGHT))
     final = final.with_duration(duration)
 
@@ -478,9 +477,8 @@ def generate_video(meme_path, clip_path, music_path, caption_text, caption_size,
     if audio_clip:
         audio_clip = audio_clip.subclipped(0, min(duration, audio_clip.duration - 0.01))
         final = final.with_audio(audio_clip)
-    else:
-        if video_clip.audio:
-            final = final.with_audio(video_clip.audio)
+    elif video_clip.audio:
+        final = final.with_audio(video_clip.audio)
 
     # Export
     if output_name is None:
@@ -515,43 +513,112 @@ def generate_video(meme_path, clip_path, music_path, caption_text, caption_size,
 # =============================================================================
 
 def main():
-    print("\n" + "=" * 50)
+    print("\n" + "=" * 60)
     print("   DRAKO EDITS - Meme Reaction Generator")
-    print("=" * 50)
+    print("=" * 60)
 
-    # Verificar carpetas
-    if not MEMES_DIR.exists():
-        print(f"\n   [X] No existe: {MEMES_DIR}")
-        sys.exit(1)
-    if not CLIPS_DIR.exists():
-        print(f"\n   [X] No existe: {CLIPS_DIR}")
-        sys.exit(1)
+    # Elegir modo
+    configs = get_configs()
 
-    # 1. Seleccionar meme
-    meme_path = select_meme()
-    print(f"   -> Meme: {meme_path.name}")
+    print("\n   Modo:")
+    print("      1. Manual (elegir imagen, clip, audio, caption)")
+    if configs:
+        print(f"      2. Desde config JSON ({len(configs)} disponibles)")
 
-    # 2. Seleccionar clip
-    clip_path = select_clip()
-    print(f"   -> Clip: {clip_path.name}")
+    mode = input("\n   Modo (1/2): ").strip()
 
-    # 3. Seleccionar musica
-    music_path = select_music()
-    print(f"   -> Musica: {music_path.name if music_path else '(audio del clip)'}")
+    if mode == "2" and configs:
+        # === MODO JSON ===
+        print("\n   Configs disponibles:")
+        for i, c in enumerate(configs, 1):
+            cfg = json.loads(c.read_text(encoding="utf-8"))
+            name = cfg.get("name", c.stem)
+            caption = cfg.get("caption", "-")[:40]
+            print(f"      {i}. {name} | caption: {caption}")
 
-    # 4. Caption
-    caption_text, caption_size = select_caption()
+        while True:
+            choice = input("\n   Config (numero): ").strip()
+            if choice.isdigit():
+                idx = int(choice) - 1
+                if 0 <= idx < len(configs):
+                    break
+            print("   [!] No valido.")
 
-    # 5. Nombre de salida
-    output_name = input("\n   Nombre del video (sin .mp4, Enter=auto): ").strip()
-    if not output_name:
-        output_name = None
+        config = load_config(configs[idx])
 
-    # 6. Generar
-    generate_video(meme_path, clip_path, music_path, caption_text, caption_size, output_name)
+        # Validar que los archivos existan
+        if not config["meme"].exists():
+            print(f"   [X] Meme no encontrado: {config['meme']}")
+            sys.exit(1)
+        if not config["clip"].exists():
+            print(f"   [X] Clip no encontrado: {config['clip']}")
+            sys.exit(1)
+        if config["music"] and not config["music"].exists():
+            print(f"   [!] Musica no encontrada: {config['music']}. Continuando sin musica.")
+            config["music"] = None
+
+        generate_video(
+            config["meme"], config["clip"], config["music"],
+            config["caption"], config["caption_size"],
+            config["name"]
+        )
+
+    else:
+        # === MODO MANUAL ===
+        # 1. Imagen
+        meme_path = select_image()
+        print(f"   -> Imagen: {meme_path.name}")
+
+        # 2. Clip
+        clip_path = select_clip()
+        print(f"   -> Clip: {clip_path.name}")
+
+        # 3. Musica
+        music_path = select_music()
+        print(f"   -> Musica: {music_path.name if music_path else '(audio del clip)'}")
+
+        # 4. Caption
+        caption_text, caption_size_key = select_caption()
+
+        # 5. Nombre
+        output_name = input("\n   Nombre del video (sin .mp4, Enter=auto): ").strip()
+        if not output_name:
+            output_name = None
+
+        # 6. Generar
+        generate_video(meme_path, clip_path, music_path, caption_text, caption_size_key, output_name)
+
+        # 7. Guardar como config?
+        save_choice = input("\n   Guardar esta combinacion como JSON config? (s/n): ").strip().lower()
+        if save_choice == "s":
+            config_name = input("   Nombre del config: ").strip()
+            if not config_name:
+                config_name = output_name or f"meme_{meme_path.stem}_{clip_path.stem}"
+            save_config(config_name, meme_path, clip_path, music_path,
+                        caption_text, caption_size_key)
 
     print("\n>>> Done!")
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser(description="Drako Edits - Meme Reaction Generator")
+    parser.add_argument("--config", type=str, default=None,
+                        help="Path a un JSON config para generar directamente")
+    args = parser.parse_args()
+
+    if args.config:
+        config = load_config(args.config)
+        if not config["meme"].exists():
+            print(f"[X] Meme no encontrado: {config['meme']}")
+            sys.exit(1)
+        if not config["clip"].exists():
+            print(f"[X] Clip no encontrado: {config['clip']}")
+            sys.exit(1)
+        generate_video(
+            config["meme"], config["clip"], config["music"],
+            config["caption"], config["caption_size"],
+            config["name"]
+        )
+    else:
+        main()
