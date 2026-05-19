@@ -9,7 +9,7 @@ Formato: Imagen (meme) arriba + Video clip abajo
          El meme siempre ocupa mas espacio que el clip (min 65%, max 75%).
          Caption superpuesto en la frontera meme/video (opcional).
          Usa | para salto de linea en el caption.
-         Auto-detecta y remueve barras negras de los clips.
+         Auto-detecta y remueve barras negras de los clips (deshabilitablee).
 
 Audio:
     - Opcion 1: Usar el audio que ya trae el clip (si tiene)
@@ -94,6 +94,7 @@ CAPTION_SIZES = {
 # Auto-crop config
 BLACK_BAR_THRESHOLD = 15
 BLACK_BAR_MIN_ROWS = 5
+MAX_CROP_RATIO = 0.30  # Nunca cropear mas del 30% del alto total
 
 
 # =============================================================================
@@ -247,6 +248,44 @@ def detect_black_bars(frame):
     return top_crop, bottom_crop
 
 
+def detect_black_bars_multiframe(video_clip):
+    """
+    Detecta barras negras muestreando multiples frames.
+    Toma el MINIMO crop de todos los samples (mas conservador).
+    Si un frame no tiene barras, no cropea.
+    Protege contra fade-ins/frames negros al inicio.
+    """
+    clip_duration = video_clip.duration
+    height = video_clip.size[1]
+
+    # Muestrear en 3 puntos: 25%, 50%, 75% de la duracion
+    sample_times = [
+        clip_duration * 0.25,
+        clip_duration * 0.50,
+        clip_duration * 0.75,
+    ]
+
+    best_top = height  # empezar con max (peor caso)
+    best_bottom = height
+
+    for t in sample_times:
+        safe_t = min(t, clip_duration - 0.1)
+        if safe_t < 0:
+            safe_t = 0
+        frame = video_clip.get_frame(safe_t)
+        top, bottom = detect_black_bars(frame)
+        # Tomar el MINIMO (mas conservador)
+        best_top = min(best_top, top)
+        best_bottom = min(best_bottom, bottom)
+
+    # Safety: nunca cropear mas del MAX_CROP_RATIO del alto total
+    max_crop_px = int(height * MAX_CROP_RATIO)
+    if best_top + best_bottom > max_crop_px:
+        return 0, 0
+
+    return best_top, best_bottom
+
+
 def fit_image_to_area(img, area_width, area_height):
     """Escala imagen para que quepa completa (fit, no crop). Fondo blanco."""
     img_ratio = img.width / img.height
@@ -343,12 +382,13 @@ def load_config(config_path):
         "music": SCRIPT_DIR / config["music"] if config.get("music") else None,
         "caption": config.get("caption", None),
         "caption_size": config.get("caption_size", "M"),
+        "auto_crop": config.get("auto_crop", True),
     }
 
     return resolved
 
 
-def save_config(name, meme_path, clip_path, music_path, caption_text, caption_size_key):
+def save_config(name, meme_path, clip_path, music_path, caption_text, caption_size_key, auto_crop=True):
     """Guarda la combinacion actual como JSON config para reutilizar."""
     CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -360,6 +400,7 @@ def save_config(name, meme_path, clip_path, music_path, caption_text, caption_si
         "music": str(music_path.relative_to(SCRIPT_DIR)) if music_path else None,
         "caption": caption_text,
         "caption_size": caption_size_key,
+        "auto_crop": auto_crop,
     }
 
     # Nombre del archivo JSON
@@ -447,6 +488,20 @@ def select_audio(clip_path):
         return result
 
 
+def select_auto_crop():
+    """Pregunta si remover barras negras automaticamente."""
+    print(f"\n   --- AUTO-CROP ---")
+    print(f"   Remover barras negras del clip automaticamente?")
+    print(f"      s = Si (detecta y remueve letterboxing)")
+    print(f"      n = No (dejar el clip tal cual)")
+    choice = input("   Auto-crop (s/n, default s): ").strip().lower()
+    if choice == "n" or choice == "no":
+        print(f"   -> Auto-crop: DESHABILITADO")
+        return False
+    print(f"   -> Auto-crop: habilitado")
+    return True
+
+
 def select_caption():
     """Pregunta caption y tamano. Retorna (text, size_key)."""
     caption_input = input("\n   Caption (texto, | para salto de linea, Enter=sin): ").strip()
@@ -466,7 +521,7 @@ def select_caption():
 # GENERADOR
 # =============================================================================
 
-def generate_video(meme_path, clip_path, music_path, caption_text, caption_size_key, output_name=None):
+def generate_video(meme_path, clip_path, music_path, caption_text, caption_size_key, output_name=None, auto_crop=True):
     """Genera el video de meme reaction."""
     caption_size = CAPTION_SIZES.get(caption_size_key, CAPTION_SIZES["M"]) if caption_size_key else None
 
@@ -479,24 +534,29 @@ def generate_video(meme_path, clip_path, music_path, caption_text, caption_size_
     else:
         print(f"   Audio:   del clip")
     print(f"   Caption: {caption_text or '(sin)'} [{caption_size_key or '-'}]")
+    print(f"   Crop:    {'auto' if auto_crop else 'deshabilitado'}")
     print(f"{'='*50}")
 
     # Cargar clip
     print("\n   Cargando clip...")
     video_clip = VideoFileClip(str(clip_path))
 
-    # Auto-detectar barras negras
-    first_frame = video_clip.get_frame(0.1)
-    top_crop, bottom_crop = detect_black_bars(first_frame)
+    # Auto-detectar barras negras (solo si habilitado)
+    if auto_crop:
+        top_crop, bottom_crop = detect_black_bars_multiframe(video_clip)
 
-    if top_crop > 0 or bottom_crop > 0:
-        orig_h = video_clip.size[1]
-        print(f"   [auto-crop] Barras: top={top_crop}px, bottom={bottom_crop}px")
-        video_clip = video_clip.cropped(
-            x1=0, y1=top_crop,
-            x2=video_clip.size[0], y2=video_clip.size[1] - bottom_crop
-        )
-        print(f"   [auto-crop] {orig_h}px -> {video_clip.size[1]}px")
+        if top_crop > 0 or bottom_crop > 0:
+            orig_h = video_clip.size[1]
+            print(f"   [auto-crop] Barras: top={top_crop}px, bottom={bottom_crop}px")
+            video_clip = video_clip.cropped(
+                x1=0, y1=top_crop,
+                x2=video_clip.size[0], y2=video_clip.size[1] - bottom_crop
+            )
+            print(f"   [auto-crop] {orig_h}px -> {video_clip.size[1]}px")
+        else:
+            print(f"   [auto-crop] Sin barras negras")
+    else:
+        print(f"   [auto-crop] Deshabilitado")
 
     clip_size = video_clip.size
 
@@ -649,7 +709,7 @@ def main():
         generate_video(
             config["meme"], config["clip"], config["music"],
             config["caption"], config["caption_size"],
-            config["name"]
+            config["name"], auto_crop=config["auto_crop"]
         )
 
     else:
@@ -665,25 +725,29 @@ def main():
         # 3. Audio (del clip o externo, solo UNO)
         music_path = select_audio(clip_path)
 
-        # 4. Caption
+        # 4. Auto-crop
+        auto_crop = select_auto_crop()
+
+        # 5. Caption
         caption_text, caption_size_key = select_caption()
 
-        # 5. Nombre
+        # 6. Nombre
         output_name = input("\n   Nombre del video (sin .mp4, Enter=auto): ").strip()
         if not output_name:
             output_name = None
 
-        # 6. Generar
-        generate_video(meme_path, clip_path, music_path, caption_text, caption_size_key, output_name)
+        # 7. Generar
+        generate_video(meme_path, clip_path, music_path, caption_text, caption_size_key,
+                       output_name, auto_crop=auto_crop)
 
-        # 7. Guardar como config?
+        # 8. Guardar como config?
         save_choice = input("\n   Guardar esta combinacion como JSON config? (s/n): ").strip().lower()
         if save_choice == "s":
             config_name = input("   Nombre del config: ").strip()
             if not config_name:
                 config_name = output_name or f"meme_{meme_path.stem}_{clip_path.stem}"
             save_config(config_name, meme_path, clip_path, music_path,
-                        caption_text, caption_size_key)
+                        caption_text, caption_size_key, auto_crop)
 
     print("\n>>> Done!")
 
@@ -693,6 +757,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Drako Edits - Meme Reaction Generator")
     parser.add_argument("--config", type=str, default=None,
                         help="Path a un JSON config para generar directamente")
+    parser.add_argument("--no-crop", action="store_true",
+                        help="Deshabilitar auto-crop de barras negras")
     args = parser.parse_args()
 
     if args.config:
@@ -703,10 +769,12 @@ if __name__ == "__main__":
         if not config["clip"].exists():
             print(f"[X] Clip no encontrado: {config['clip']}")
             sys.exit(1)
+        # --no-crop override el config JSON
+        auto_crop = config["auto_crop"] if not args.no_crop else False
         generate_video(
             config["meme"], config["clip"], config["music"],
             config["caption"], config["caption_size"],
-            config["name"]
+            config["name"], auto_crop=auto_crop
         )
     else:
         main()
