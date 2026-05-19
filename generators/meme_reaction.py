@@ -16,6 +16,10 @@ Audio:
     - Opcion 2: Reemplazar con un audio externo (de tools_output/audios/)
     - Solo se escucha UNO de los dos, nunca ambos mezclados.
 
+Navegacion:
+    - Al elegir archivos, se navega por carpetas (entrar/salir)
+    - Permite organizar material en subcarpetas sin romper nada
+
 Fuentes de material:
     - Imagenes: tools_output/posts/ (descargadas de IG)
     - Videos:   tools_output/videos/ (descargados de YT)
@@ -93,35 +97,100 @@ BLACK_BAR_MIN_ROWS = 5
 
 
 # =============================================================================
-# FUNCIONES UTILITARIAS
+# NAVEGACION POR CARPETAS
 # =============================================================================
 
-def get_images_recursive(directory):
-    """Obtiene todas las imagenes de un directorio (recursivo)."""
-    extensions = {'.jpg', '.jpeg', '.png', '.webp', '.bmp'}
-    if not directory.exists():
-        return []
-    imgs = [f for f in directory.rglob("*") if f.suffix.lower() in extensions]
-    return sorted(imgs)
+def browse_folder(root_dir, extensions, label):
+    """
+    Navegacion interactiva por carpetas.
+    Muestra subcarpetas y archivos del directorio actual.
+    Permite entrar a carpetas o elegir un archivo.
+
+    Args:
+        root_dir: Directorio raiz (no se puede subir mas arriba de aqui)
+        extensions: Set de extensiones validas (ej: {'.jpg', '.png'})
+        label: Nombre para mostrar (ej: "imagen", "clip", "audio")
+
+    Returns:
+        Path al archivo seleccionado
+    """
+    if not root_dir.exists():
+        print(f"\n   [X] No existe: {root_dir}")
+        return None
+
+    current_dir = root_dir
+
+    while True:
+        # Obtener carpetas y archivos del nivel actual
+        folders = sorted([f for f in current_dir.iterdir() if f.is_dir() and f.name != '.gitkeep'])
+        files = sorted([f for f in current_dir.iterdir()
+                       if f.is_file() and f.suffix.lower() in extensions])
+
+        # Mostrar ubicacion actual
+        try:
+            rel_path = current_dir.relative_to(root_dir)
+            location = str(rel_path) if str(rel_path) != "." else "(raiz)"
+        except ValueError:
+            location = current_dir.name
+
+        print(f"\n   --- {label.upper()} ---")
+        print(f"   Ubicacion: {root_dir.name}/{location}")
+
+        if not folders and not files:
+            print(f"   (vacio)")
+            if current_dir == root_dir:
+                return None
+            # Volver automaticamente
+            current_dir = current_dir.parent
+            continue
+
+        # Numerar items: carpetas primero, luego archivos
+        items = []  # lista de (tipo, path)
+        idx = 1
+
+        if folders:
+            for folder in folders:
+                # Contar archivos dentro (recursivo) para dar contexto
+                count = len([f for f in folder.rglob("*") if f.suffix.lower() in extensions])
+                print(f"      {idx}. [>] {folder.name}/ ({count} {label}s)")
+                items.append(("folder", folder))
+                idx += 1
+
+        if files:
+            for f in files:
+                print(f"      {idx}. {f.name}")
+                items.append(("file", f))
+                idx += 1
+
+        # Opcion de volver
+        if current_dir != root_dir:
+            print(f"      0. <- Volver")
+
+        # Input
+        while True:
+            choice = input(f"\n   Elegir {label} (numero): ").strip()
+
+            if choice == "0" and current_dir != root_dir:
+                current_dir = current_dir.parent
+                break
+
+            if choice.isdigit():
+                chosen_idx = int(choice) - 1
+                if 0 <= chosen_idx < len(items):
+                    item_type, item_path = items[chosen_idx]
+                    if item_type == "folder":
+                        current_dir = item_path
+                        break
+                    else:
+                        # Archivo seleccionado
+                        return item_path
+
+            print("   [!] No valido.")
 
 
-def get_videos_from_dir(directory):
-    """Obtiene todos los videos de un directorio."""
-    extensions = {'.mp4', '.mov', '.avi', '.mkv', '.webm'}
-    if not directory.exists():
-        return []
-    vids = [f for f in directory.iterdir() if f.suffix.lower() in extensions]
-    return sorted(vids)
-
-
-def get_audio_files(directory):
-    """Obtiene todos los audios de un directorio."""
-    extensions = {'.mp3', '.wav', '.ogg', '.m4a', '.aac'}
-    if not directory.exists():
-        return []
-    auds = [f for f in directory.iterdir() if f.suffix.lower() in extensions]
-    return sorted(auds)
-
+# =============================================================================
+# FUNCIONES UTILITARIAS
+# =============================================================================
 
 def get_configs():
     """Obtiene todos los JSON configs disponibles."""
@@ -306,47 +375,29 @@ def save_config(name, meme_path, clip_path, music_path, caption_text, caption_si
 # SELECCION INTERACTIVA
 # =============================================================================
 
+IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.bmp'}
+VIDEO_EXTENSIONS = {'.mp4', '.mov', '.avi', '.mkv', '.webm'}
+AUDIO_EXTENSIONS = {'.mp3', '.wav', '.ogg', '.m4a', '.aac'}
+
+
 def select_image():
-    """Muestra imagenes disponibles en tools_output/posts/ y deja elegir."""
-    images = get_images_recursive(IMAGES_DIR)
-    if not images:
+    """Navega tools_output/posts/ para elegir una imagen."""
+    result = browse_folder(IMAGES_DIR, IMAGE_EXTENSIONS, "imagen")
+    if result is None:
         print(f"\n   [X] No hay imagenes en {IMAGES_DIR}")
         print(f"       Descarga posts con: python tools/instagram/posts_nologin.py")
         sys.exit(1)
-
-    print(f"\n   Imagenes disponibles ({len(images)}):")
-    for i, img in enumerate(images, 1):
-        rel = img.relative_to(IMAGES_DIR)
-        print(f"      {i}. {rel}")
-
-    while True:
-        choice = input("\n   Imagen (numero): ").strip()
-        if choice.isdigit():
-            idx = int(choice) - 1
-            if 0 <= idx < len(images):
-                return images[idx]
-        print("   [!] No valido.")
+    return result
 
 
 def select_clip():
-    """Muestra videos disponibles en tools_output/videos/ y deja elegir."""
-    clips = get_videos_from_dir(VIDEOS_DIR)
-    if not clips:
+    """Navega tools_output/videos/ para elegir un clip."""
+    result = browse_folder(VIDEOS_DIR, VIDEO_EXTENSIONS, "clip")
+    if result is None:
         print(f"\n   [X] No hay videos en {VIDEOS_DIR}")
         print(f"       Descarga clips con: python tools/youtube/download_video_yt.py")
         sys.exit(1)
-
-    print(f"\n   Clips disponibles ({len(clips)}):")
-    for i, c in enumerate(clips, 1):
-        print(f"      {i}. {c.name}")
-
-    while True:
-        choice = input("\n   Clip (numero): ").strip()
-        if choice.isdigit():
-            idx = int(choice) - 1
-            if 0 <= idx < len(clips):
-                return clips[idx]
-        print("   [!] No valido.")
+    return result
 
 
 def select_audio(clip_path):
@@ -357,8 +408,6 @@ def select_audio(clip_path):
 
     Retorna: Path al audio externo, o None para usar audio del clip.
     """
-    music_files = get_audio_files(AUDIOS_DIR)
-
     # Detectar si el clip fue descargado sin audio
     clip_sin_audio = "(sinaudio)" in clip_path.name.lower()
 
@@ -367,44 +416,35 @@ def select_audio(clip_path):
 
     if clip_sin_audio:
         print(f"   [!] El clip '{clip_path.name}' fue descargado SIN audio.")
-        if not music_files:
+        # Intentar navegar audios
+        result = browse_folder(AUDIOS_DIR, AUDIO_EXTENSIONS, "audio")
+        if result is None:
             print(f"   [!] No hay audios en {AUDIOS_DIR}. El video sera MUDO.")
             print(f"       Descarga audio con: python tools/youtube/download_audio_yt.py")
             return None
-        print(f"\n   Elige un audio externo:")
+        print(f"   -> Audio: {result.name} (externo)")
+        return result
     else:
         print(f"\n   Fuente de audio:")
         print(f"      1. Usar audio del clip (el que ya trae el video)")
-        if music_files:
-            print(f"      2. Reemplazar con audio externo (de tools_output/audios/)")
-        else:
-            print(f"      -- No hay audios externos en {AUDIOS_DIR}")
+        print(f"      2. Elegir audio externo (de tools_output/audios/)")
 
         while True:
             choice = input("\n   Opcion (1/2): ").strip()
             if choice == "1" or choice == "":
                 print(f"   -> Audio: del clip")
                 return None
-            if choice == "2" and music_files:
+            if choice == "2":
                 break
-            if not music_files:
-                print("   [!] No hay audios externos. Usando audio del clip.")
-                return None
             print("   [!] No valido.")
 
-    # Mostrar audios disponibles
-    print(f"\n   Audios disponibles ({len(music_files)}):")
-    for i, m in enumerate(music_files, 1):
-        print(f"      {i}. {m.name}")
-
-    while True:
-        choice = input("\n   Audio (numero): ").strip()
-        if choice.isdigit():
-            idx = int(choice) - 1
-            if 0 <= idx < len(music_files):
-                print(f"   -> Audio: {music_files[idx].name} (reemplaza audio del clip)")
-                return music_files[idx]
-        print("   [!] No valido.")
+        # Navegar audios
+        result = browse_folder(AUDIOS_DIR, AUDIO_EXTENSIONS, "audio")
+        if result is None:
+            print(f"   [!] No hay audios. Usando audio del clip.")
+            return None
+        print(f"   -> Audio: {result.name} (reemplaza audio del clip)")
+        return result
 
 
 def select_caption():
