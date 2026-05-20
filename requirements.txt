@@ -1,14 +1,22 @@
+# Video generation
 moviepy>=2.0.0
-Pillow>=10.0.0
+Pillow>=9.2.0,<12
 numpy>=1.24.0
+
+# OpenAI (clasificacion de memes, captions)
+openai>=1.0.0
+python-dotenv>=1.0.0
+
+# Instagram (instagrapi reemplaza instaloader)
+instagrapi>=2.0.0
 
 # YouTube Upload
 google-api-python-client>=2.100.0
 google-auth-oauthlib>=1.1.0
 google-auth>=2.23.0
 
-# Instagram Downloader
-instaloader>=4.10.0
-
-# YouTube Downloader (CLI tool, se instala via pip)
+# YouTube Downloader
 yt-dlp>=2024.1.0
+
+# Requests (descargas generales)
+requests>=2.28.0
