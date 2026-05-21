@@ -4,10 +4,13 @@
 Paso 1: Scraping de Links con Selenium (Brave)
 
 Abre Brave visible → navega a perfiles de IG → pausa para login manual
-→ scrollea → extrae links de posts tipo foto → guarda shortcodes nuevos.
+→ scrollea → extrae links de posts tipo FOTO SIMPLE → guarda shortcodes nuevos.
 
-Navegador: Brave (Chromium-based, usa ChromeDriver)
-Login: MANUAL — Selenium pausa y espera que el usuario haga login si es necesario.
+Filtro:
+- Solo fotos simples (sin overlay icons)
+- Videos/Reels tienen SVG de play → skip
+- Carousels tienen SVG de múltiples páginas → skip
+- Regla: si el link del grid tiene CUALQUIER SVG dentro → no es foto simple → skip
 
 Output: historial/links_scrapeados.json
 
@@ -21,13 +24,13 @@ import json
 import sys
 import time
 import re
+import random
 import subprocess
 from pathlib import Path
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
@@ -42,19 +45,16 @@ HISTORIAL_DIR = SCRIPT_DIR / "historial"
 LINKS_FILE = HISTORIAL_DIR / "links_scrapeados.json"
 
 # --- BRAVE ---
-# Cambiar si tu Brave está en otra ruta
 BRAVE_PATH = r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"
-# Mac: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
 
 # --- PERFILES TARGET ---
-# TODO: Mover a config.json cuando exista
 PERFILES_TARGET = [
     "elmello2023",
 ]
 
 # --- SCRAPING ---
-SCROLL_COUNT = 5          # Cuántas veces scrollear para cargar más posts
-SCROLL_DELAY = 2.5        # Segundos entre scrolls (random se suma)
+SCROLL_COUNT = 5          # Cuántas veces scrollear
+SCROLL_DELAY = 3.0        # Segundos base entre scrolls
 DELAY_ENTRE_PERFILES = 5  # Segundos entre perfiles
 
 
@@ -63,14 +63,9 @@ DELAY_ENTRE_PERFILES = 5  # Segundos entre perfiles
 # =============================================================================
 
 def get_brave_version():
-    """
-    Detecta la versión major de Brave automáticamente.
-    En Windows: usa PowerShell para leer la versión del .exe
-    En otros: usa --version flag
-    """
+    """Detecta versión major de Brave via PowerShell (Windows)."""
     try:
         if sys.platform == "win32":
-            # PowerShell: leer FileVersion del ejecutable
             ps_cmd = (
                 'powershell -Command "'
                 f"(Get-Item '{BRAVE_PATH}').VersionInfo.FileVersion"
@@ -84,7 +79,6 @@ def get_brave_version():
             if version_match:
                 return int(version_match.group(1))
         else:
-            # Mac/Linux: --version funciona normal
             result = subprocess.run(
                 [BRAVE_PATH, "--version"],
                 capture_output=True, text=True, timeout=10
@@ -94,7 +88,6 @@ def get_brave_version():
                 return int(version_match.group(1))
     except Exception:
         pass
-
     return None
 
 
@@ -102,8 +95,7 @@ def load_historial():
     """Carga historial de links ya scrapeados."""
     if LINKS_FILE.exists():
         try:
-            data = json.loads(LINKS_FILE.read_text(encoding="utf-8"))
-            return data
+            return json.loads(LINKS_FILE.read_text(encoding="utf-8"))
         except Exception:
             pass
     return {"scrapeados": [], "por_descargar": []}
@@ -116,59 +108,40 @@ def save_historial(data):
 
 
 def create_driver():
-    """
-    Crea el driver de Selenium con Brave.
-    Abre Brave VISIBLE (no headless) para permitir login manual.
-    Detecta versión de Brave para descargar ChromeDriver compatible.
-    """
+    """Crea driver de Selenium con Brave."""
     options = Options()
     options.binary_location = BRAVE_PATH
 
-    # NO headless — necesitamos ver el browser para login manual
-    # options.add_argument("--headless=new")
-
-    # Evitar detección básica de bots
+    # Anti-detección
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
-
-    # Ventana grande para ver bien el grid
     options.add_argument("--window-size=1400,900")
 
-    # Detectar versión de Brave y descargar ChromeDriver compatible
+    # ChromeDriver compatible con Brave
     brave_version = get_brave_version()
     if brave_version:
         print(f"   Brave versión detectada: {brave_version}")
         service = Service(ChromeDriverManager(driver_version=str(brave_version)).install())
     else:
-        print("   [!] No se pudo detectar versión de Brave.")
-        print("       Intentando con versión hardcodeada 148...")
-        print("       Si falla, edita BRAVE_VERSION_FALLBACK en este archivo.")
-        # Fallback hardcodeado — cambiar si actualizas Brave
-        BRAVE_VERSION_FALLBACK = "148"
-        service = Service(ChromeDriverManager(driver_version=BRAVE_VERSION_FALLBACK).install())
+        print("   [!] No se pudo detectar versión de Brave. Fallback: 148")
+        service = Service(ChromeDriverManager(driver_version="148").install())
 
     driver = webdriver.Chrome(service=service, options=options)
-
-    # Quitar la propiedad navigator.webdriver
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-
     return driver
 
 
 def wait_for_login(driver):
-    """
-    Pausa para login manual.
-    El usuario hace login en el browser y luego presiona Enter en la terminal.
-    """
+    """Pausa para login manual."""
     print("")
     print("=" * 60)
     print("   PAUSA PARA LOGIN MANUAL")
     print("=" * 60)
-    print("   El navegador está abierto.")
-    print("   1. Si Instagram te pide login, hazlo manualmente en el browser.")
-    print("   2. Si ya estás loggeado, simplemente continúa.")
-    print("   3. Cuando estés listo, presiona Enter aquí.")
+    print("   El navegador está abierto en Instagram.")
+    print("   1. Haz login manualmente si te lo pide.")
+    print("   2. Confirma que ves tu feed/home.")
+    print("   3. Presiona Enter aquí cuando estés listo.")
     print("=" * 60)
     input("\n   >>> Presiona Enter para continuar... ")
     print("   [OK] Continuando...")
@@ -177,100 +150,197 @@ def wait_for_login(driver):
 
 def scroll_page(driver, times=SCROLL_COUNT):
     """Scrollea la página para cargar más posts."""
-    import random
+    prev_count = 0
     for i in range(times):
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        delay = SCROLL_DELAY + random.uniform(0.5, 2.0)
-        print(f"      Scroll {i+1}/{times} (esperando {delay:.1f}s)")
+        delay = SCROLL_DELAY + random.uniform(1.0, 2.5)
+        print(f"      Scroll {i+1}/{times} (esperando {delay:.1f}s)...", end="")
         time.sleep(delay)
 
+        # Simula humano: sube un poco y vuelve a bajar
+        driver.execute_script("window.scrollBy(0, -200);")
+        time.sleep(0.8)
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(1.5)
 
-def extract_post_links(driver):
+        # Contar links para ver progreso
+        current_count = driver.execute_script(
+            "return document.querySelectorAll('a[href*=\"/p/\"]').length;"
+        )
+        print(f" ({current_count} links en DOM)")
+
+        if current_count == prev_count and i > 1:
+            print("      [!] No cargaron más links.")
+        prev_count = current_count
+
+
+def extract_and_filter_posts(driver):
     """
-    Extrae todos los links de posts del grid actual.
-    Retorna lista de shortcodes.
-    """
-    links = driver.find_elements(By.CSS_SELECTOR, 'a[href*="/p/"]')
-
-    shortcodes = set()
-    for link in links:
-        href = link.get_attribute("href")
-        if href:
-            match = re.search(r'/p/([A-Za-z0-9_-]+)', href)
-            if match:
-                shortcodes.add(match.group(1))
-
-    return list(shortcodes)
-
-
-def filter_photos_only(driver, shortcodes):
-    """
-    Filtra shortcodes para quedarse solo con fotos (no videos/reels).
+    Extrae posts del grid y los clasifica usando JavaScript.
     
-    En el grid de IG, los posts con video tienen un SVG overlay.
-    Los posts solo-foto no tienen overlay.
+    Regla de filtrado:
+    - Fotos simples: el <a> del grid NO tiene ningún <svg> dentro
+    - Videos/Reels: tienen SVG con icono de play (triángulo)
+    - Carousels: tienen SVG con icono de múltiples páginas
+    - Regla simplificada: tiene SVG = skip, no tiene SVG = foto simple
+    
+    Returns:
+        tuple: (fotos_simples, con_svg_overlay)
+            Cada uno es una lista de shortcodes
     """
-    photo_shortcodes = []
-    video_shortcodes = []
+    result = driver.execute_script("""
+        const fotos = [];
+        const otros = [];
+        
+        // Obtener todos los links /p/ de la página
+        const allLinks = document.querySelectorAll('a[href*="/p/"]');
+        
+        allLinks.forEach(link => {
+            const href = link.getAttribute('href') || '';
+            const match = href.match(/\/p\/([A-Za-z0-9_-]+)/);
+            if (!match) return;
+            
+            const shortcode = match[1];
+            
+            // Buscar SVGs dentro del link
+            // Fotos simples: 0 SVGs overlay
+            // Videos: tienen SVG (play icon)
+            // Carousels: tienen SVG (multi-page icon)
+            const svgs = link.querySelectorAll('svg');
+            
+            if (svgs.length === 0) {
+                fotos.push(shortcode);
+            } else {
+                otros.push(shortcode);
+            }
+        });
+        
+        return {fotos: fotos, otros: otros};
+    """)
 
-    for sc in shortcodes:
-        try:
-            link_el = driver.find_element(By.CSS_SELECTOR, f'a[href*="/p/{sc}/"]')
-            svgs = link_el.find_elements(By.TAG_NAME, "svg")
+    fotos = result.get("fotos", [])
+    otros = result.get("otros", [])
+    return fotos, otros
 
-            is_video = False
-            for svg in svgs:
-                aria = svg.get_attribute("aria-label") or ""
-                if any(word in aria.lower() for word in ["reel", "video", "clip"]):
-                    is_video = True
-                    break
 
-            if is_video:
-                video_shortcodes.append(sc)
-            else:
-                photo_shortcodes.append(sc)
+def debug_page_state(driver):
+    """
+    Imprime información de debug sobre el estado de la página.
+    Se activa cuando se encuentran muy pocos posts.
+    """
+    print("")
+    print("   " + "~" * 50)
+    print("   DEBUG: Analizando DOM de la página")
+    print("   " + "~" * 50)
 
-        except Exception:
-            photo_shortcodes.append(sc)
+    # Total de <a> en la página
+    total_a = driver.execute_script("return document.querySelectorAll('a').length;")
+    print(f"   Total de <a> en la página: {total_a}")
 
-    return photo_shortcodes, video_shortcodes
+    # Links con /p/
+    p_links = driver.execute_script("""
+        const links = document.querySelectorAll('a[href*="/p/"]');
+        return Array.from(links).map(a => {
+            const svgCount = a.querySelectorAll('svg').length;
+            return {href: a.href, svgs: svgCount, text: a.textContent.slice(0, 30)};
+        });
+    """)
+    print(f"   Links con /p/: {len(p_links)}")
+    for item in p_links[:15]:
+        print(f"     {item['href']} (SVGs: {item['svgs']})")
+
+    # Links con /reel/
+    reel_links = driver.execute_script("""
+        const links = document.querySelectorAll('a[href*="/reel/"]');
+        return Array.from(links).map(a => a.href);
+    """)
+    if reel_links:
+        print(f"   Links con /reel/: {len(reel_links)}")
+        for h in reel_links[:5]:
+            print(f"     {h}")
+
+    # Buscar el grid principal (article)
+    articles = driver.execute_script("return document.querySelectorAll('article').length;")
+    print(f"   <article> elements: {articles}")
+
+    # Buscar por la estructura del grid de IG
+    grid_items = driver.execute_script("""
+        // Intentar encontrar el contenedor del grid
+        // Instagram suele usar un div con role='tabpanel' o similar
+        const mainContent = document.querySelector('main') || document.body;
+        const allLinks = mainContent.querySelectorAll('a');
+        const igLinks = [];
+        allLinks.forEach(a => {
+            const href = a.getAttribute('href') || '';
+            if (href.startsWith('/p/') || href.startsWith('/reel/')) {
+                igLinks.push(href);
+            }
+        });
+        return igLinks;
+    """)
+    print(f"   Links relativos /p/ o /reel/ en <main>: {len(grid_items)}")
+    for h in grid_items[:15]:
+        print(f"     {h}")
+
+    print("   " + "~" * 50)
+    print("")
 
 
 def scrape_profile(driver, username, historial):
     """
-    Scrapes un perfil y retorna shortcodes nuevos de fotos.
+    Scrapes un perfil y retorna shortcodes nuevos de fotos simples.
     """
     url = f"https://www.instagram.com/{username}/"
     print(f"\n   Navegando a: {url}")
     driver.get(url)
 
-    # Esperar que cargue el grid
+    # Esperar que cargue - buscar links /p/ O cualquier article
     try:
         WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, 'a[href*="/p/"]'))
+            EC.presence_of_element_located((By.CSS_SELECTOR, 'a[href*="/p/"], article'))
         )
-        print("   [OK] Grid cargado.")
+        print("   [OK] Página cargada.")
     except Exception:
-        print(f"   [X] No se pudo cargar el grid de @{username}.")
-        print("       Puede que necesites hacer login o el perfil no existe.")
+        print(f"   [X] No se pudo cargar @{username}.")
+        print("       Verifica login y que el perfil exista.")
         return []
 
-    # Scrollear para cargar más posts
+    # Espera extra para render completo
+    time.sleep(4)
+
+    # Contar posts iniciales
+    initial_count = driver.execute_script(
+        "return document.querySelectorAll('a[href*=\"/p/\"]').length;"
+    )
+    print(f"   Posts /p/ visibles inicialmente: {initial_count}")
+
+    # Si hay 0 o muy pocos, activar debug antes de scrollear
+    if initial_count <= 3:
+        print("   [!] Muy pocos posts detectados. Activando debug...")
+        debug_page_state(driver)
+
+    # Scrollear
     print(f"   Scrolleando ({SCROLL_COUNT} veces)...")
     scroll_page(driver)
 
-    # Extraer links
-    all_shortcodes = extract_post_links(driver)
-    print(f"   Links encontrados: {len(all_shortcodes)}")
+    # Espera final
+    time.sleep(2)
 
-    # Filtrar solo fotos
-    photo_scs, video_scs = filter_photos_only(driver, all_shortcodes)
-    print(f"   Fotos: {len(photo_scs)} | Videos/Reels: {len(video_scs)}")
+    # Extraer y filtrar
+    fotos_simples, otros = extract_and_filter_posts(driver)
+
+    print(f"   Resultado:")
+    print(f"     Fotos simples (sin SVG overlay): {len(fotos_simples)}")
+    print(f"     Videos/Carousels (con SVG overlay): {len(otros)}")
+
+    # Si hay pocos resultados totales, debug
+    if len(fotos_simples) + len(otros) <= 3:
+        debug_page_state(driver)
 
     # Filtrar ya scrapeados
     ya_scrapeados = set(historial.get("scrapeados", []))
-    nuevos = [sc for sc in photo_scs if sc not in ya_scrapeados]
-    print(f"   Nuevos (no scrapeados antes): {len(nuevos)}")
+    nuevos = [sc for sc in fotos_simples if sc not in ya_scrapeados]
+    print(f"     Nuevos (no scrapeados antes): {len(nuevos)}")
 
     return nuevos
 
@@ -291,11 +361,11 @@ def main():
     print(f"   Perfiles target: {PERFILES_TARGET}")
     print(f"   Scrolls por perfil: {SCROLL_COUNT}")
     print(f"   Historial: {LINKS_FILE}")
+    print(f"   Filtro: SOLO fotos simples (sin SVG = sin icono video/carousel)")
 
-    # Verificar que Brave existe
+    # Verificar Brave
     if not Path(BRAVE_PATH).exists():
         print(f"\n   [X] No se encontró Brave en: {BRAVE_PATH}")
-        print("       Edita BRAVE_PATH en este archivo.")
         return
 
     # Cargar historial
@@ -308,7 +378,7 @@ def main():
     driver = create_driver()
 
     try:
-        # Navegar a Instagram primero
+        # Navegar a Instagram
         driver.get("https://www.instagram.com/")
         time.sleep(3)
 
@@ -327,7 +397,7 @@ def main():
             todos_nuevos.extend(nuevos)
 
             if i < len(PERFILES_TARGET) - 1:
-                print(f"\n   Esperando {DELAY_ENTRE_PERFILES}s antes del siguiente perfil...")
+                print(f"\n   Esperando {DELAY_ENTRE_PERFILES}s...")
                 time.sleep(DELAY_ENTRE_PERFILES)
 
         # Actualizar historial
@@ -347,9 +417,11 @@ def main():
         print(SEPARATOR_EQ)
 
         if todos_nuevos:
-            print("\n   Primeros 5 nuevos:")
-            for sc in todos_nuevos[:5]:
+            print("\n   Links nuevos:")
+            for sc in todos_nuevos[:10]:
                 print(f"     - https://www.instagram.com/p/{sc}/")
+            if len(todos_nuevos) > 10:
+                print(f"     ... y {len(todos_nuevos) - 10} más")
 
     finally:
         print("\n   Cerrando navegador...")
