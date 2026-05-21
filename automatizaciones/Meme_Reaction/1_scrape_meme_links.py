@@ -18,6 +18,7 @@ Dependencias: selenium, webdriver-manager
 """
 
 import json
+import sys
 import time
 import re
 import subprocess
@@ -64,23 +65,36 @@ DELAY_ENTRE_PERFILES = 5  # Segundos entre perfiles
 def get_brave_version():
     """
     Detecta la versión major de Brave automáticamente.
-    Esto evita el mismatch entre ChromeDriver y Brave.
+    En Windows: usa PowerShell para leer la versión del .exe
+    En otros: usa --version flag
     """
     try:
-        # Brave soporta --version en Windows
-        result = subprocess.run(
-            [BRAVE_PATH, "--version"],
-            capture_output=True, text=True, timeout=10
-        )
-        # Output: "Brave Browser 148.0.7778.167" o similar
-        version_match = re.search(r'(\d+)\.\d+\.\d+\.\d+', result.stdout)
-        if version_match:
-            return int(version_match.group(1))
+        if sys.platform == "win32":
+            # PowerShell: leer FileVersion del ejecutable
+            ps_cmd = (
+                'powershell -Command "'
+                f"(Get-Item '{BRAVE_PATH}').VersionInfo.FileVersion"
+                '"'
+            )
+            result = subprocess.run(
+                ps_cmd, capture_output=True, text=True,
+                shell=True, timeout=15
+            )
+            version_match = re.search(r'(\d+)\.\d+\.\d+\.\d+', result.stdout)
+            if version_match:
+                return int(version_match.group(1))
+        else:
+            # Mac/Linux: --version funciona normal
+            result = subprocess.run(
+                [BRAVE_PATH, "--version"],
+                capture_output=True, text=True, timeout=10
+            )
+            version_match = re.search(r'(\d+)\.\d+\.\d+\.\d+', result.stdout)
+            if version_match:
+                return int(version_match.group(1))
     except Exception:
         pass
 
-    # Fallback: intentar extraer del path/registry
-    # Si no se puede detectar, retorna None y webdriver-manager intentará solo
     return None
 
 
@@ -125,11 +139,14 @@ def create_driver():
     brave_version = get_brave_version()
     if brave_version:
         print(f"   Brave versión detectada: {brave_version}")
-        # Forzar ChromeDriver de la misma major version
-        service = Service(ChromeDriverManager(driver_version=f"{brave_version}").install())
+        service = Service(ChromeDriverManager(driver_version=str(brave_version)).install())
     else:
-        print("   [!] No se pudo detectar versión de Brave, intentando automático...")
-        service = Service(ChromeDriverManager().install())
+        print("   [!] No se pudo detectar versión de Brave.")
+        print("       Intentando con versión hardcodeada 148...")
+        print("       Si falla, edita BRAVE_VERSION_FALLBACK en este archivo.")
+        # Fallback hardcodeado — cambiar si actualizas Brave
+        BRAVE_VERSION_FALLBACK = "148"
+        service = Service(ChromeDriverManager(driver_version=BRAVE_VERSION_FALLBACK).install())
 
     driver = webdriver.Chrome(service=service, options=options)
 
@@ -173,7 +190,6 @@ def extract_post_links(driver):
     Extrae todos los links de posts del grid actual.
     Retorna lista de shortcodes.
     """
-    # Buscar todos los links que apuntan a posts (/p/XXXXX/)
     links = driver.find_elements(By.CSS_SELECTOR, 'a[href*="/p/"]')
 
     shortcodes = set()
@@ -193,23 +209,15 @@ def filter_photos_only(driver, shortcodes):
     
     En el grid de IG, los posts con video tienen un SVG overlay.
     Los posts solo-foto no tienen overlay.
-    
-    Estrategia: Para cada link /p/XXXXX/, verificar si su contenedor
-    tiene un SVG de video/reel.
     """
     photo_shortcodes = []
     video_shortcodes = []
 
     for sc in shortcodes:
         try:
-            # Buscar el link específico
             link_el = driver.find_element(By.CSS_SELECTOR, f'a[href*="/p/{sc}/"]')
-
-            # Buscar SVGs dentro del link (indican video/reel/carousel)
             svgs = link_el.find_elements(By.TAG_NAME, "svg")
 
-            # Si tiene SVGs overlay, probablemente es video o carousel
-            # Los SVGs de video tienen aria-label como "Reel" o "Video"
             is_video = False
             for svg in svgs:
                 aria = svg.get_attribute("aria-label") or ""
@@ -223,7 +231,6 @@ def filter_photos_only(driver, shortcodes):
                 photo_shortcodes.append(sc)
 
         except Exception:
-            # Si no puede verificar, lo incluye como foto (será filtrado después)
             photo_shortcodes.append(sc)
 
     return photo_shortcodes, video_shortcodes
