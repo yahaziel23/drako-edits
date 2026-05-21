@@ -128,7 +128,7 @@ def create_driver():
         # Forzar ChromeDriver de la misma major version
         service = Service(ChromeDriverManager(driver_version=f"{brave_version}").install())
     else:
-        print(f"   [!] No se pudo detectar versión de Brave, intentando automático...")
+        print("   [!] No se pudo detectar versión de Brave, intentando automático...")
         service = Service(ChromeDriverManager().install())
 
     driver = webdriver.Chrome(service=service, options=options)
@@ -144,7 +144,8 @@ def wait_for_login(driver):
     Pausa para login manual.
     El usuario hace login en el browser y luego presiona Enter en la terminal.
     """
-    print("\n" + "=" * 60)
+    print("")
+    print("=" * 60)
     print("   PAUSA PARA LOGIN MANUAL")
     print("=" * 60)
     print("   El navegador está abierto.")
@@ -153,7 +154,8 @@ def wait_for_login(driver):
     print("   3. Cuando estés listo, presiona Enter aquí.")
     print("=" * 60)
     input("\n   >>> Presiona Enter para continuar... ")
-    print("   [OK] Continuando...\n")
+    print("   [OK] Continuando...")
+    print("")
 
 
 def scroll_page(driver, times=SCROLL_COUNT):
@@ -240,10 +242,10 @@ def scrape_profile(driver, username, historial):
         WebDriverWait(driver, 15).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, 'a[href*="/p/"]'))
         )
-        print(f"   [OK] Grid cargado.")
+        print("   [OK] Grid cargado.")
     except Exception:
         print(f"   [X] No se pudo cargar el grid de @{username}.")
-        print(f"       Puede que necesites hacer login o el perfil no existe.")
+        print("       Puede que necesites hacer login o el perfil no existe.")
         return []
 
     # Scrollear para cargar más posts
@@ -270,10 +272,15 @@ def scrape_profile(driver, username, historial):
 # MAIN
 # =============================================================================
 
+SEPARATOR = "-" * 60
+SEPARATOR_EQ = "=" * 60
+
+
 def main():
-    print("\n" + "=" * 60)
+    print("")
+    print(SEPARATOR_EQ)
     print("   MEME REACTION - PASO 1: SCRAPING DE LINKS")
-    print("=" * 60)
+    print(SEPARATOR_EQ)
     print(f"   Perfiles target: {PERFILES_TARGET}")
     print(f"   Scrolls por perfil: {SCROLL_COUNT}")
     print(f"   Historial: {LINKS_FILE}")
@@ -281,7 +288,7 @@ def main():
     # Verificar que Brave existe
     if not Path(BRAVE_PATH).exists():
         print(f"\n   [X] No se encontró Brave en: {BRAVE_PATH}")
-        print(f"       Edita BRAVE_PATH en este archivo.")
+        print("       Edita BRAVE_PATH en este archivo.")
         return
 
     # Cargar historial
@@ -304,9 +311,10 @@ def main():
         # Scrapeear cada perfil
         todos_nuevos = []
         for i, username in enumerate(PERFILES_TARGET):
-            print(f"\n{'\u2500' * 60}")
+            print("")
+            print(SEPARATOR)
             print(f"   PERFIL {i+1}/{len(PERFILES_TARGET)}: @{username}")
-            print(f"{'\u2500' * 60}")
+            print(SEPARATOR)
 
             nuevos = scrape_profile(driver, username, historial)
             todos_nuevos.extend(nuevos)
@@ -321,17 +329,18 @@ def main():
         save_historial(historial)
 
         # Resumen
-        print(f"\n{'=' * 60}")
-        print(f"   RESUMEN")
-        print(f"{'=' * 60}")
+        print("")
+        print(SEPARATOR_EQ)
+        print("   RESUMEN")
+        print(SEPARATOR_EQ)
         print(f"   Nuevos links encontrados: {len(todos_nuevos)}")
         print(f"   Total en historial: {len(historial['scrapeados'])}")
         print(f"   Pendientes de descargar: {len(historial['por_descargar'])}")
         print(f"   Guardado en: {LINKS_FILE}")
-        print(f"{'=' * 60}")
+        print(SEPARATOR_EQ)
 
         if todos_nuevos:
-            print(f"\n   Primeros 5 nuevos:")
+            print("\n   Primeros 5 nuevos:")
             for sc in todos_nuevos[:5]:
                 print(f"     - https://www.instagram.com/p/{sc}/")
 
