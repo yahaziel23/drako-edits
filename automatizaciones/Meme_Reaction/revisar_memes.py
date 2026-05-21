@@ -59,13 +59,13 @@ def save_descartados(data):
 
 
 def load_downloads_log():
-    """Carga historial de descargas para saber tipo."""
+    """Carga historial de descargas para saber tipo y metricas."""
     if DOWNLOADS_FILE.exists():
         try:
             return json.loads(DOWNLOADS_FILE.read_text(encoding="utf-8"))
         except Exception:
             pass
-    return {"descargados_foto": [], "descargados_frame": [], "skipped_carousels": [], "errores": []}
+    return {"descargados_foto": [], "descargados_frame": [], "skipped_carousels": [], "skipped_low_likes": [], "errores": []}
 
 
 def load_clasificaciones():
@@ -78,15 +78,41 @@ def load_clasificaciones():
     return {"clasificados": [], "skipped_video_content": [], "errores": []}
 
 
-def get_source_type(shortcode, downloads_log):
-    """Determina si es foto o frame de video."""
-    fotos = [d["shortcode"] for d in downloads_log.get("descargados_foto", [])]
-    frames = [d["shortcode"] for d in downloads_log.get("descargados_frame", [])]
-    if shortcode in fotos:
-        return "foto"
-    elif shortcode in frames:
-        return "frame (screenshot de video)"
-    return "desconocido"
+def get_post_info(shortcode, downloads_log):
+    """
+    Obtiene tipo y metricas de un shortcode desde el log de descargas.
+    Returns: dict con source_type, likes, comments, views
+    """
+    for item in downloads_log.get("descargados_foto", []):
+        if item["shortcode"] == shortcode:
+            return {
+                "source_type": "foto",
+                "likes": item.get("likes", "?"),
+                "comments": item.get("comments", "?"),
+                "views": item.get("views", None),
+            }
+    for item in downloads_log.get("descargados_frame", []):
+        if item["shortcode"] == shortcode:
+            return {
+                "source_type": "frame (screenshot de video)",
+                "likes": item.get("likes", "?"),
+                "comments": item.get("comments", "?"),
+                "views": item.get("views", None),
+            }
+    return {"source_type": "desconocido", "likes": "?", "comments": "?", "views": None}
+
+
+def format_number(n):
+    """Formatea numero con separador de miles."""
+    if n is None or n == "?":
+        return "?"
+    if isinstance(n, int):
+        if n >= 1_000_000:
+            return f"{n/1_000_000:.1f}M"
+        elif n >= 1_000:
+            return f"{n/1_000:.1f}K"
+        return str(n)
+    return str(n)
 
 
 def get_pending_review(descartados_data, clasificaciones):
@@ -188,10 +214,18 @@ def main():
 
     for i, image_path in enumerate(pending):
         shortcode = image_path.stem
-        source = get_source_type(shortcode, downloads_log)
+        info = get_post_info(shortcode, downloads_log)
+        source = info["source_type"]
+        likes = format_number(info["likes"])
+        comments = format_number(info["comments"])
+        views = format_number(info["views"])
 
         print(f"\n   [{i+1}/{len(pending)}] {shortcode}")
         print(f"       Tipo: {source}")
+        likes_str = f"       Likes: {likes}  |  Comments: {comments}"
+        if info["views"] is not None:
+            likes_str += f"  |  Views: {views}"
+        print(likes_str)
         print(f"       Archivo: {image_path.name}")
 
         # Abrir imagen
@@ -207,6 +241,7 @@ def main():
                 descartados_data["mantenidos"].append({
                     "shortcode": shortcode,
                     "source_type": source,
+                    "likes": info["likes"],
                     "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 })
                 print("       -> MANTENIDO")
@@ -217,6 +252,7 @@ def main():
                 descartados_data["descartados"].append({
                     "shortcode": shortcode,
                     "source_type": source,
+                    "likes": info["likes"],
                     "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 })
                 # Borrar archivo
