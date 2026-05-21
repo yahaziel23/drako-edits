@@ -9,7 +9,8 @@ Extrae el máximo de info en UNA sola llamada para no repetir análisis:
   - Es video real (frame que no funciona solo)
   - Descripción detallada (contexto para caption en paso 6)
   - Categorías (puede ser más de una)
-  - Franjas negras (instrucciones de crop)
+  - Ideas creativas de video (formatos, captions, clips sugeridos)
+  - Franjas negras (instrucciones de crop programáticas)
   - Color de fondo (para el video final)
   - Día especial (viernes, halloween, navidad, etc.)
 
@@ -59,7 +60,7 @@ DELAY_ENTRE_CALLS = 2     # Segundos entre llamadas a OpenAI
 
 # --- OPENAI ---
 MODEL = "gpt-4o"          # Modelo con vision
-MAX_TOKENS = 800          # Tokens máximos de respuesta (más campos = más tokens)
+MAX_TOKENS = 1200         # Tokens máximos de respuesta (más campos = más tokens)
 
 # --- CATEGORIAS ---
 CATEGORIAS = [
@@ -154,6 +155,7 @@ una escena que necesita contexto de video), marca "es_video_real": true."""
     prompt = f"""{context_note}
 
 Analiza esta imagen a fondo. Necesito TODA la info posible en UNA sola llamada.
+Este análisis se usará para generar un video de "meme reaction" (meme arriba + clip de reacción abajo).
 
 Categorías disponibles: {categorias_str}
 
@@ -163,29 +165,49 @@ Responde EXCLUSIVAMENTE en este formato JSON (sin markdown, sin ```):
   "es_video_real": true/false,
   "categorias": ["cat1", "cat2"],
   "confianza": 0.0-1.0,
-  "descripcion": "Descripción detallada del meme: qué muestra, qué texto tiene, cuál es el chiste/remate. Escríbela como si alguien que NO ve la imagen pudiera entender el humor.",
+  "descripcion": "Descripción detallada del meme: qué muestra, qué texto tiene, cuál es el chiste/remate. Escríbela como si alguien que NO ve la imagen pudiera entender el humor completamente.",
+  "ideas_video": [
+    {{
+      "formato": "meme_arriba_clip_abajo" | "dos_videos_paralelos" | "meme_con_caption_y_clip" | "otro",
+      "caption_sugerido": "texto corto para poner encima del video, o null si no necesita",
+      "clip_ideal": "descripción del tipo de clip que quedaría bien abajo (ej: 'persona riéndose sin control', 'alguien comiendo palomitas tipo Michael Jackson', 'persona asintiendo con cara de orgullo')",
+      "descripcion_idea": "breve explicación de por qué esta combinación funcionaría"
+    }}
+  ],
   "background_color": "negro" | "blanco" | "otro",
   "franjas_negras": {{
     "tiene": true/false,
-    "arriba_px_pct": "porcentaje aproximado de la imagen que es franja negra arriba (ej: 10%)",
-    "abajo_px_pct": "porcentaje aproximado abajo",
-    "tiene_texto_en_franjas": true/false,
-    "instruccion_crop": "Descripción de cómo recortar: ej 'Cortar 10% arriba y 15% abajo, no hay texto en las franjas' o 'NO cortar, hay texto blanco en la franja negra de arriba'"
+    "arriba": 0.0-1.0,
+    "abajo": 0.0-1.0,
+    "crop_arriba": true/false,
+    "crop_abajo": true/false
   }},
-  "dia_especial": null | "viernes" | "lunes" | "halloween" | "navidad" | "fin_de_ano" | "san_valentin" | "otro: [cual]",
-  "razon": "breve explicación de por qué estas categorías"
+  "dia_especial": null | "viernes" | "lunes" | "halloween" | "navidad" | "fin_de_ano" | "san_valentin" | "otro: [cual]"
 }}
 
 Reglas:
 - "valido": false si no es un meme (es publicidad, selfie, paisaje, promoción, etc.)
 - "es_video_real": true si la imagen claramente es un frame de video que no funciona como meme estático
-- Si "valido" es false o "es_video_real" es true, pon categorias como [] y descripcion como breve razón
+- Si "valido" es false o "es_video_real" es true, pon categorias como [], ideas_video como [], y descripcion breve
 - "categorias": puede tener 1 a 3 categorías que apliquen (de más relevante a menos)
 - "confianza": qué tan seguro estás de la clasificación (0.5 = dudoso, 1.0 = obvio)
-- "descripcion": DETALLADA. Incluye texto visible, contexto cultural, el remate. Es para que otro modelo genere un caption SIN ver la imagen.
+- "descripcion": DETALLADA. Incluye texto visible exacto, contexto cultural, el remate. Es para que otro modelo genere un caption SIN ver la imagen.
+- "ideas_video": genera 2-3 ideas creativas de cómo usar este meme en un video corto. Piensa en formatos virales de TikTok/Reels. Puedes sugerir:
+  * Formatos alternativos (split screen con 2 clips, meme + reacción clásica, etc.)
+  * Clips específicos populares que quedarían bien (ej: "Michael Jackson comiendo palomitas", "gato mirando fijo", "persona llorando de risa")
+  * Captions que le añadan humor al video
+  * Si el meme tiene estructura "X / Yo:" sugiere split con el contraste
 - "background_color": el color predominante del fondo del meme (para elegir fondo del video final)
-- "franjas_negras": detecta bordes/padding negro arriba/abajo (común en screenshots de video)
-- "dia_especial": si el meme SOLO tiene sentido en un día/fecha específica (viernes, halloween, etc.). null si es atemporal."""
+- "franjas_negras": detecta bordes/padding negro arriba/abajo.
+  * "arriba" y "abajo": valor decimal (0.0 a 1.0) del porcentaje de la imagen que es franja. Ej: 15% = 0.15
+  * "crop_arriba": true si se PUEDE cortar (no hay texto importante en la franja de arriba), false si hay texto
+  * "crop_abajo": true si se PUEDE cortar (no hay texto importante en la franja de abajo), false si hay texto
+  * IMPORTANTE: evalúa arriba y abajo POR SEPARADO. Puede haber texto arriba pero no abajo.
+- "dia_especial": si el meme SOLO tiene sentido en un día/fecha específica. Analiza el contexto completo:
+  * "día 31" + "todo el año" = fin_de_ano (NO halloween)
+  * "es viernes" = viernes
+  * Escenas navideñas = navidad
+  * null si es atemporal (publicar cualquier día)"""
 
     try:
         response = client.chat.completions.create(
@@ -222,14 +244,16 @@ Reglas:
 
     except json.JSONDecodeError:
         return {"valido": False, "es_video_real": False, "categorias": [], "confianza": 0,
-                "descripcion": "", "background_color": "otro",
-                "franjas_negras": {"tiene": False}, "dia_especial": None,
-                "razon": f"Error parseando respuesta: {content[:200]}"}
+                "descripcion": "", "ideas_video": [], "background_color": "otro",
+                "franjas_negras": {"tiene": False, "arriba": 0, "abajo": 0, "crop_arriba": False, "crop_abajo": False},
+                "dia_especial": None,
+                "_error": f"Error parseando respuesta: {content[:200]}"}
     except Exception as e:
         return {"valido": False, "es_video_real": False, "categorias": [], "confianza": 0,
-                "descripcion": "", "background_color": "otro",
-                "franjas_negras": {"tiene": False}, "dia_especial": None,
-                "razon": f"Error API: {str(e)[:200]}"}
+                "descripcion": "", "ideas_video": [], "background_color": "otro",
+                "franjas_negras": {"tiene": False, "arriba": 0, "abajo": 0, "crop_arriba": False, "crop_abajo": False},
+                "dia_especial": None,
+                "_error": f"Error API: {str(e)[:200]}"}
 
 
 def get_pending_images(clasificaciones):
@@ -287,9 +311,10 @@ def main():
     print("     - Validez + es_video_real")
     print("     - Categorías (1-3)")
     print("     - Descripción detallada (para caption)")
-    print("     - Franjas negras + instrucciones crop")
+    print("     - Ideas de video (2-3 ideas creativas)")
+    print("     - Franjas negras (crop por separado arriba/abajo)")
     print("     - Background color")
-    print("     - Día especial (viernes, halloween, etc.)")
+    print("     - Día especial (viernes, fin_de_ano, etc.)")
 
     # Cargar .env
     if ENV_FILE.exists():
@@ -350,52 +375,60 @@ def main():
         categorias = result.get("categorias", [])
         confianza = result.get("confianza", 0)
         descripcion = result.get("descripcion", "")
+        ideas_video = result.get("ideas_video", [])
         background_color = result.get("background_color", "otro")
-        franjas_negras = result.get("franjas_negras", {"tiene": False})
+        franjas_negras = result.get("franjas_negras", {"tiene": False, "arriba": 0, "abajo": 0, "crop_arriba": False, "crop_abajo": False})
         dia_especial = result.get("dia_especial", None)
-        razon = result.get("razon", "")
+        error_msg = result.get("_error", "")
 
-        if es_video_real:
+        if error_msg:
+            print(f" -> ERROR ({error_msg[:40]})")
+            stats["errores"] += 1
+            clasificaciones["errores"].append({
+                "shortcode": shortcode,
+                "error": error_msg,
+                "fecha": now,
+            })
+        elif es_video_real:
             print(f" -> SKIP (video real)")
             stats["video_real"] += 1
             clasificaciones["skipped_video_content"].append({
                 "shortcode": shortcode,
                 "descripcion": descripcion,
-                "razon": razon,
                 "fecha": now,
             })
         elif not valido:
-            cats_str = ", ".join(categorias) if categorias else "none"
-            print(f" -> NO VALIDO ({razon[:40]})")
+            print(f" -> NO VALIDO")
             stats["no_valido"] += 1
             clasificaciones["skipped_video_content"].append({
                 "shortcode": shortcode,
-                "razon": f"No es meme: {razon}",
+                "descripcion": f"No es meme: {descripcion}",
                 "fecha": now,
             })
         elif not categorias or confianza == 0:
-            print(f" -> ERROR ({razon[:40]})")
+            print(f" -> ERROR (sin categorías)")
             stats["errores"] += 1
             clasificaciones["errores"].append({
                 "shortcode": shortcode,
-                "razon": razon,
+                "error": "Sin categorías asignadas",
                 "fecha": now,
             })
         else:
             cats_str = ", ".join(categorias)
+            n_ideas = len(ideas_video)
             dia_str = f" [{dia_especial}]" if dia_especial else ""
-            print(f" -> {cats_str} (conf: {confianza}){dia_str}")
+            print(f" -> {cats_str} ({n_ideas} ideas){dia_str}")
             stats["clasificados"] += 1
             clasificaciones["clasificados"].append({
                 "shortcode": shortcode,
                 "categorias": categorias,
                 "confianza": confianza,
                 "descripcion": descripcion,
+                "ideas_video": ideas_video,
                 "background_color": background_color,
                 "franjas_negras": franjas_negras,
                 "dia_especial": dia_especial,
                 "source_type": source_type,
-                "razon": razon,
                 "fecha": now,
             })
 

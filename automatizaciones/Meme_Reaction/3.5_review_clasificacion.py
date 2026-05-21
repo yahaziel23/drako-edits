@@ -81,6 +81,22 @@ def open_image(image_path):
         pass
 
 
+def wrap_text(text, width=90, indent="         "):
+    """Wrap text to fit terminal width."""
+    lines = []
+    words = text.split()
+    line = indent
+    for word in words:
+        if len(line) + len(word) + 1 > width:
+            lines.append(line)
+            line = indent + word
+        else:
+            line += (" " + word) if line.strip() else (indent + word)
+    if line.strip():
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def format_clasificacion(item):
     """Formatea la clasificacion para mostrar bonito en terminal."""
     lines = []
@@ -89,42 +105,43 @@ def format_clasificacion(item):
     lines.append(f"       Source:     {item.get('source_type', '?')}")
     lines.append(f"       Background: {item.get('background_color', '?')}")
 
-    # Descripcion (max 120 chars por linea)
-    desc = item.get("descripcion", "(sin descripcion)")
-    lines.append(f"       Descripcion:")
-    words = desc.split()
-    line = "         "
-    for word in words:
-        if len(line) + len(word) + 1 > 100:
-            lines.append(line)
-            line = "         " + word
-        else:
-            line += " " + word if line.strip() else "         " + word
-    if line.strip():
-        lines.append(line)
-
-    # Franjas negras
-    franjas = item.get("franjas_negras", {})
-    if franjas.get("tiene"):
-        arriba = franjas.get("arriba_px_pct", "?")
-        abajo = franjas.get("abajo_px_pct", "?")
-        texto = "SI" if franjas.get("tiene_texto_en_franjas") else "NO"
-        crop_inst = franjas.get("instruccion_crop", "")
-        lines.append(f"       Franjas:    arriba={arriba}, abajo={abajo}, texto_en_franjas={texto}")
-        if crop_inst:
-            lines.append(f"                   Crop: {crop_inst}")
-    else:
-        lines.append(f"       Franjas:    No tiene")
-
     # Dia especial
     dia = item.get("dia_especial")
     if dia:
         lines.append(f"       Dia especial: {dia}")
 
-    # Razon
-    razon = item.get("razon", "")
-    if razon:
-        lines.append(f"       Razon: {razon}")
+    # Descripcion
+    desc = item.get("descripcion", "(sin descripcion)")
+    lines.append(f"       Descripcion:")
+    lines.append(wrap_text(desc))
+
+    # Franjas negras
+    franjas = item.get("franjas_negras", {})
+    if franjas.get("tiene"):
+        arriba = franjas.get("arriba", franjas.get("arriba_px_pct", "?"))
+        abajo = franjas.get("abajo", franjas.get("abajo_px_pct", "?"))
+        crop_arr = franjas.get("crop_arriba", "?")
+        crop_abj = franjas.get("crop_abajo", "?")
+        lines.append(f"       Franjas:    arriba={arriba} (crop={crop_arr}), abajo={abajo} (crop={crop_abj})")
+    else:
+        lines.append(f"       Franjas:    No tiene")
+
+    # Ideas de video
+    ideas = item.get("ideas_video", [])
+    if ideas:
+        lines.append(f"")
+        lines.append(f"       IDEAS DE VIDEO ({len(ideas)}):")
+        for j, idea in enumerate(ideas):
+            lines.append(f"       [{j+1}] Formato: {idea.get('formato', '?')}")
+            caption = idea.get('caption_sugerido')
+            if caption:
+                lines.append(f"           Caption: \"{caption}\"")
+            clip = idea.get('clip_ideal', '')
+            if clip:
+                lines.append(f"           Clip: {clip}")
+            desc_idea = idea.get('descripcion_idea', '')
+            if desc_idea:
+                lines.append(f"           Por que: {desc_idea}")
 
     return "\n".join(lines)
 
@@ -190,7 +207,7 @@ def main():
             print(f"\n   [{i+1}/{len(incorrectos)}] {sc}")
             if original:
                 print(format_clasificacion(original))
-            print(f"       TU NOTA: {nota}")
+            print(f"\n       TU NOTA: {nota}")
             # Abrir imagen
             img_path = MEMES_DIR / f"{sc}.jpg"
             if img_path.exists() and not args.sin_abrir:
@@ -253,6 +270,7 @@ def main():
                     "nota": nota,
                     "categorias_ia": item.get("categorias", []),
                     "descripcion_ia": item.get("descripcion", ""),
+                    "ideas_ia": item.get("ideas_video", []),
                     "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 })
                 print("       -> MAL (anotado)")
@@ -283,7 +301,7 @@ def _print_summary(stats, review_data):
         accuracy = total_ok / (total_ok + total_mal) * 100
         print(f"   Accuracy del prompt: {accuracy:.0f}%")
     if total_mal > 0:
-        print(f"\n   Notas de errores:")
+        print(f"\n   Ultimas notas de errores:")
         for item in review_data.get("incorrectos", [])[-5:]:
             print(f"     - {item['shortcode']}: {item.get('nota', '')}")
     print(f"   Guardado en: {REVIEW_FILE}")
