@@ -1,0 +1,23 @@
+# =============================================================================
+# Meme Reaction - Automatización (sub-proyecto)
+# Dependencias específicas de este pipeline
+# =============================================================================
+
+# Scraping (Paso 1)
+selenium>=4.15.0
+webdriver-manager>=4.0.0
+
+# Descarga de Instagram (Paso 2)
+instaloader>=4.10.0
+
+# IA - Clasificación y verificación (Pasos 3, 5, 6)
+openai>=1.0.0
+python-dotenv>=1.0.0
+
+# Generación de video (Paso 7)
+moviepy>=2.0.0
+Pillow>=9.2.0,<12
+numpy>=1.24.0
+
+# Requests generales
+requests>=2.28.0
