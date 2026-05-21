@@ -25,6 +25,9 @@ Uso:
     python 7_generate_video.py              # Interactivo (confirma cada uno)
     python 7_generate_video.py --auto       # Genera todo sin preguntar
     python 7_generate_video.py --max 3      # Solo 3 videos
+    python 7_generate_video.py --redo ABC123          # Re-generar uno
+    python 7_generate_video.py --redo ABC123 DEF456   # Re-generar varios
+    python 7_generate_video.py --redo-all             # Re-generar todos
 
 Dependencias: moviepy, Pillow, numpy
 """
@@ -174,6 +177,37 @@ def get_pending_generations(matches, generados):
         if match["shortcode"] not in already and match.get("clip_id"):
             pending.append(match)
     return pending
+
+
+# =============================================================================
+# FUNCIONES - REDO (Re-generar videos)
+# =============================================================================
+
+def remove_from_generados(generados, shortcodes):
+    """
+    Remueve shortcodes de generados y errores para que vuelvan a ser 'pendientes'.
+    Retorna cuantos se removieron.
+    """
+    removed = 0
+    shortcodes_set = set(shortcodes)
+
+    # Remover de generados
+    original_gen = len(generados.get("generados", []))
+    generados["generados"] = [
+        item for item in generados.get("generados", [])
+        if item["shortcode"] not in shortcodes_set
+    ]
+    removed += original_gen - len(generados["generados"])
+
+    # Remover de errores
+    original_err = len(generados.get("errores", []))
+    generados["errores"] = [
+        item for item in generados.get("errores", [])
+        if item["shortcode"] not in shortcodes_set
+    ]
+    removed += original_err - len(generados["errores"])
+
+    return removed
 
 
 # =============================================================================
@@ -593,6 +627,10 @@ def main():
                         help=f"Maximo de videos a generar (default: {MAX_POR_SESION})")
     parser.add_argument("--auto", action="store_true",
                         help="Generar todo sin preguntar")
+    parser.add_argument("--redo", nargs="+", metavar="SHORTCODE",
+                        help="Re-generar video(s) especifico(s) por shortcode")
+    parser.add_argument("--redo-all", action="store_true",
+                        help="Re-generar TODOS los videos (limpia historial completo)")
     args = parser.parse_args()
 
     print("")
@@ -612,6 +650,26 @@ def main():
     clasificaciones = load_clasificaciones()
     catalogo = load_catalogo()
     generados = load_generados()
+
+    # --- REDO: remover de generados para que vuelvan a ser pendientes ---
+    if args.redo_all:
+        total = len(generados.get("generados", [])) + len(generados.get("errores", []))
+        generados["generados"] = []
+        generados["errores"] = []
+        save_generados(generados)
+        print(f"\n   [REDO-ALL] Limpiado historial completo ({total} entradas).")
+        print(f"   Todos los matches vuelven a ser pendientes.")
+    elif args.redo:
+        removed = remove_from_generados(generados, args.redo)
+        save_generados(generados)
+        if removed > 0:
+            print(f"\n   [REDO] Removidos {removed} de generados/errores:")
+            for sc in args.redo:
+                print(f"          - {sc}")
+        else:
+            print(f"\n   [REDO] Ningun shortcode encontrado en generados/errores:")
+            for sc in args.redo:
+                print(f"          - {sc} (no estaba)")
 
     # Obtener pendientes
     pending = get_pending_generations(matches, generados)
