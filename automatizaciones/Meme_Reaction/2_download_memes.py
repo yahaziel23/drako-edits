@@ -7,26 +7,29 @@ Lee shortcodes de historial/links_scrapeados.json (campo 'por_descargar').
 Para cada uno:
   - PRIMERO verifica si ya fue descargado (archivo existe o está en historial)
   - Consulta tipo con Post.from_shortcode() (1 request a IG)
+  - Filtra por mínimo de likes (default: 5000)
   - GraphImage -> descarga imagen directa con requests
   - GraphVideo -> descarga video con requests, extrae frame con ffmpeg, borra video
   - GraphSidecar -> skip (carousel)
 
-NOTA: NO usa instaloader.download_post() porque tiene un bug de paths en Windows
-(convierte rutas absolutas en nombres de carpeta con caracteres full-width).
+NOTA: NO usa instaloader.download_post() porque tiene un bug de paths en Windows.
 Solo usa instaloader para obtener el tipo y URL del post.
 
-Protecciones anti-ban:
+Protecciones:
   - Delay de 5s entre requests
   - Pausa larga (3 min) cada 20 posts procesados
   - Límite máximo de posts por sesión (default: 50)
   - Auto-stop si detecta rate limit / login required
   - Skip automático de posts ya descargados (no gasta request)
+  - Filtro por mínimo de likes (ahorra descarga de basura)
 
 Output: memes_descargados/{shortcode}.jpg
 
 Uso:
     python 2_download_memes.py
     python 2_download_memes.py --max 10
+    python 2_download_memes.py --min-likes 10000
+    python 2_download_memes.py --min-likes 0      # Sin filtro
 
 Dependencias: instaloader, requests
 """
@@ -68,6 +71,9 @@ DELAY_ENTRE_POSTS = 5     # Segundos entre cada request
 PAUSA_CADA_N = 20         # Cada cuántos posts hacer pausa larga
 PAUSA_DURACION = 180      # Segundos de pausa larga (3 min)
 
+# --- FILTRO DE CALIDAD ---
+MIN_LIKES = 5000          # Mínimo de likes para descargar (default)
+
 
 # =============================================================================
 # FUNCIONES
@@ -100,6 +106,7 @@ def load_downloads_log():
         "descargados_foto": [],
         "descargados_frame": [],
         "skipped_carousels": [],
+        "skipped_low_likes": [],
         "errores": []
     }
 
@@ -112,7 +119,7 @@ def save_downloads_log(data):
 
 def get_already_processed(downloads_log):
     """
-    Obtiene todos los shortcodes que ya fueron procesados (descargados, skipped, o error).
+    Obtiene todos los shortcodes que ya fueron procesados.
     Esto evita gastar un request a IG si ya lo procesamos antes.
     """
     already = set()
@@ -121,15 +128,19 @@ def get_already_processed(downloads_log):
     for item in downloads_log.get("descargados_frame", []):
         already.add(item["shortcode"])
     for sc in downloads_log.get("skipped_carousels", []):
-        already.add(sc)
-    # NO incluimos errores aquí para que reintente los que fallaron
+        if isinstance(sc, str):
+            already.add(sc)
+        elif isinstance(sc, dict):
+            already.add(sc.get("shortcode", ""))
+    for item in downloads_log.get("skipped_low_likes", []):
+        already.add(item["shortcode"])
+    # NO incluimos errores para que reintente los que fallaron
     return already
 
 
 def get_already_downloaded_files():
     """
     Obtiene shortcodes que ya tienen archivo en memes_descargados/.
-    Doble check por si el historial se perdió pero el archivo existe.
     """
     if not MEMES_DIR.exists():
         return set()
@@ -138,7 +149,7 @@ def get_already_downloaded_files():
 
 
 def create_instaloader():
-    """Crea instancia de instaloader SIN LOGIN (solo para queries, no para download)."""
+    """Crea instancia de instaloader SIN LOGIN (solo para queries)."""
     L = instaloader.Instaloader(
         download_videos=False,
         download_video_thumbnails=False,
@@ -152,7 +163,6 @@ def create_instaloader():
 def download_file(url, output_path):
     """
     Descarga un archivo de una URL directamente con requests.
-    Evita el bug de paths de instaloader en Windows.
     """
     try:
         response = req.get(url, stream=True, timeout=60)
@@ -185,14 +195,33 @@ def extract_first_frame(video_path, output_path):
         return False
 
 
-def process_shortcode(L, shortcode, stats):
+def get_post_metrics(post):
+    """
+    Extrae métricas de engagement del post.
+    """
+    metrics = {
+        "likes": post.likes or 0,
+        "comments": post.comments or 0,
+    }
+    # video_view_count solo existe para GraphVideo
+    if post.typename == "GraphVideo":
+        try:
+            metrics["views"] = post.video_view_count or 0
+        except Exception:
+            metrics["views"] = 0
+    return metrics
+
+
+def process_shortcode(L, shortcode, stats, min_likes):
     """
     Procesa un shortcode:
     1. Obtiene info del post con instaloader (1 request a IG)
-    2. Según el tipo, descarga con requests (NO usa instaloader.download_post)
+    2. Verifica mínimo de likes
+    3. Según el tipo, descarga con requests
     
     Returns:
-        str: 'foto', 'frame', 'skip_carousel', 'error', 'rate_limit'
+        tuple: (resultado_str, metrics_dict)
+        resultado_str: 'foto', 'frame', 'skip_carousel', 'skip_low_likes', 'error', 'rate_limit'
     """
     counter = f"[{stats['processed']}/{stats['total']}]"
 
@@ -201,20 +230,34 @@ def process_shortcode(L, shortcode, stats):
         post = instaloader.Post.from_shortcode(L.context, shortcode)
     except instaloader.exceptions.QueryReturnedNotFoundException:
         print(f"   {counter} {shortcode} -> [X] No encontrado (borrado?)")
-        return "error"
+        return "error", {}
     except instaloader.exceptions.ConnectionException as e:
         error_str = str(e).lower()
         if "429" in error_str or "rate" in error_str or "login" in error_str or "redirect" in error_str or "403" in error_str:
             print(f"   {counter} {shortcode} -> [X] RATE LIMIT / BLOCKED")
             print("   [!!!] Deteniendo para evitar ban. Progreso guardado.")
-            return "rate_limit"
+            return "rate_limit", {}
         print(f"   {counter} {shortcode} -> [X] Error conexión: {e}")
-        return "error"
+        return "error", {}
     except Exception as e:
         print(f"   {counter} {shortcode} -> [X] Error: {e}")
-        return "error"
+        return "error", {}
 
+    # === PASO 2: Extraer métricas ===
+    metrics = get_post_metrics(post)
     typename = post.typename
+    likes = metrics["likes"]
+
+    # === PASO 3: Filtro de likes ===
+    if min_likes > 0 and likes < min_likes:
+        views_str = f", {metrics.get('views', 0)} views" if 'views' in metrics else ""
+        print(f"   {counter} {shortcode} -> SKIP ({likes} likes{views_str} < {min_likes} min)")
+        return "skip_low_likes", metrics
+
+    # Info de engagement en el log
+    views_str = f", {metrics.get('views', 0)} views" if 'views' in metrics else ""
+    engagement_str = f"({likes} likes{views_str})"
+
     MEMES_DIR.mkdir(parents=True, exist_ok=True)
 
     # === GRAPHIMAGE: Descargar foto directa ===
@@ -223,11 +266,11 @@ def process_shortcode(L, shortcode, stats):
         output_path = MEMES_DIR / f"{shortcode}.jpg"
         success = download_file(image_url, output_path)
         if success:
-            print(f"   {counter} {shortcode} -> [OK] foto descargada")
-            return "foto"
+            print(f"   {counter} {shortcode} -> [OK] foto descargada {engagement_str}")
+            return "foto", metrics
         else:
             print(f"   {counter} {shortcode} -> [X] Error descargando imagen")
-            return "error"
+            return "error", metrics
 
     # === GRAPHVIDEO: Descargar video, extraer frame, borrar video ===
     elif typename == "GraphVideo":
@@ -241,27 +284,27 @@ def process_shortcode(L, shortcode, stats):
         if not success_download:
             print(f"   {counter} {shortcode} -> [X] Error descargando video")
             _cleanup_temp()
-            return "error"
+            return "error", metrics
 
         # Extraer primer frame
         success_frame = extract_first_frame(temp_video_path, output_frame_path)
         _cleanup_temp()
 
         if success_frame:
-            print(f"   {counter} {shortcode} -> [OK] frame extraído (video/foto+audio)")
-            return "frame"
+            print(f"   {counter} {shortcode} -> [OK] frame extraído {engagement_str}")
+            return "frame", metrics
         else:
             print(f"   {counter} {shortcode} -> [X] Error extrayendo frame")
-            return "error"
+            return "error", metrics
 
     # === GRAPHSIDECAR: Skip ===
     elif typename == "GraphSidecar":
         print(f"   {counter} {shortcode} -> skip (carousel)")
-        return "skip_carousel"
+        return "skip_carousel", metrics
 
     else:
         print(f"   {counter} {shortcode} -> skip (tipo: {typename})")
-        return "skip_carousel"
+        return "skip_carousel", metrics
 
 
 def _cleanup_temp():
@@ -281,15 +324,19 @@ SEPARATOR_EQ = "=" * 60
 def main():
     parser = argparse.ArgumentParser(description="Paso 2: Descargar memes")
     parser.add_argument("--max", type=int, default=MAX_POR_SESION,
-                        help=f"Máximo de posts a PROCESAR (default: {MAX_POR_SESION}). Cada uno = 1 request a IG.")
+                        help=f"Máximo de posts a PROCESAR (default: {MAX_POR_SESION}).")
+    parser.add_argument("--min-likes", type=int, default=MIN_LIKES,
+                        help=f"Mínimo de likes para descargar (default: {MIN_LIKES}). Usa 0 para sin filtro.")
     args = parser.parse_args()
     max_sesion = args.max
+    min_likes = args.min_likes
 
     print("")
     print(SEPARATOR_EQ)
     print("   MEME REACTION - PASO 2: DESCARGA DE MEMES")
     print(SEPARATOR_EQ)
     print(f"   Máximo por sesión: {max_sesion} (cada uno = 1 request a IG)")
+    print(f"   Mínimo de likes: {min_likes}" + (" (sin filtro)" if min_likes == 0 else ""))
     print(f"   Delay entre posts: {DELAY_ENTRE_POSTS}s")
     print(f"   Pausa cada {PAUSA_CADA_N} posts: {PAUSA_DURACION}s ({PAUSA_DURACION//60} min)")
     print(f"   Carpeta destino: {MEMES_DIR}")
@@ -298,6 +345,7 @@ def main():
     print("     GraphImage   -> descarga foto directa (con requests)")
     print("     GraphVideo   -> descarga video, extrae frame, borra video")
     print("     GraphSidecar -> skip (carousel)")
+    print(f"     < {min_likes} likes -> skip (baja calidad)")
 
     # Cargar pendientes
     links_data = load_links()
@@ -312,9 +360,11 @@ def main():
 
     # Cargar historial de descargas
     downloads_log = load_downloads_log()
+    # Asegurar que existe la key skipped_low_likes (por si el JSON es viejo)
+    if "skipped_low_likes" not in downloads_log:
+        downloads_log["skipped_low_likes"] = []
 
     # === PROTECCION CONTRA DUPLICADOS ===
-    # Obtener shortcodes que ya fueron procesados o que ya tienen archivo
     already_in_log = get_already_processed(downloads_log)
     already_in_files = get_already_downloaded_files()
     already_done = already_in_log | already_in_files
@@ -322,14 +372,13 @@ def main():
     # Filtrar duplicados de por_descargar (sin gastar requests)
     duplicados_encontrados = [sc for sc in por_descargar if sc in already_done]
     if duplicados_encontrados:
-        print(f"   [SKIP] {len(duplicados_encontrados)} ya descargados (se sacan de la cola)")
+        print(f"   [SKIP] {len(duplicados_encontrados)} ya procesados (se sacan de la cola)")
         por_descargar = [sc for sc in por_descargar if sc not in already_done]
-        # Actualizar links_data
         links_data["por_descargar"] = por_descargar
         save_links(links_data)
 
     if not por_descargar:
-        print("\n   [!] Todos los pendientes ya fueron descargados previamente.")
+        print("\n   [!] Todos los pendientes ya fueron procesados previamente.")
         return
 
     print(f"   Pendientes reales (sin duplicados): {len(por_descargar)}")
@@ -353,6 +402,7 @@ def main():
         "fotos": 0,
         "frames": 0,
         "skipped_carousel": 0,
+        "skipped_low_likes": 0,
         "errores": 0,
     }
     processed_shortcodes = []
@@ -368,7 +418,7 @@ def main():
             print("   [OK] Continuando...\n")
 
         # Procesar
-        result = process_shortcode(L, shortcode, stats)
+        result, metrics = process_shortcode(L, shortcode, stats, min_likes)
 
         if result == "rate_limit":
             stopped_early = True
@@ -380,13 +430,22 @@ def main():
 
         if result == "foto":
             stats["fotos"] += 1
-            downloads_log["descargados_foto"].append({"shortcode": shortcode, "fecha": now})
+            downloads_log["descargados_foto"].append({
+                "shortcode": shortcode, "fecha": now, **metrics
+            })
         elif result == "frame":
             stats["frames"] += 1
-            downloads_log["descargados_frame"].append({"shortcode": shortcode, "fecha": now})
+            downloads_log["descargados_frame"].append({
+                "shortcode": shortcode, "fecha": now, **metrics
+            })
         elif result == "skip_carousel":
             stats["skipped_carousel"] += 1
             downloads_log["skipped_carousels"].append(shortcode)
+        elif result == "skip_low_likes":
+            stats["skipped_low_likes"] += 1
+            downloads_log["skipped_low_likes"].append({
+                "shortcode": shortcode, "fecha": now, **metrics
+            })
         elif result == "error":
             stats["errores"] += 1
             downloads_log["errores"].append({"shortcode": shortcode, "fecha": now})
@@ -409,8 +468,9 @@ def main():
     print(SEPARATOR_EQ)
     print(f"   Procesados: {stats['processed']} requests a IG")
     print(f"   Fotos descargadas: {stats['fotos']}")
-    print(f"   Frames extraídos (video/foto+audio): {stats['frames']}")
-    print(f"   Carousels (skip): {stats['skipped_carousel']}")
+    print(f"   Frames extraídos: {stats['frames']}")
+    print(f"   Skipped (< {min_likes} likes): {stats['skipped_low_likes']}")
+    print(f"   Skipped (carousel): {stats['skipped_carousel']}")
     print(f"   Errores: {stats['errores']}")
     print(f"   Total imágenes guardadas: {stats['fotos'] + stats['frames']}")
     print(f"   Pendientes restantes: {len(links_data['por_descargar'])}")
