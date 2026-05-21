@@ -5,19 +5,20 @@ Paso 2: Descarga de Memes (instaloader SIN LOGIN)
 
 Lee shortcodes de historial/links_scrapeados.json (campo 'por_descargar').
 Para cada uno:
-  - Consulta tipo con Post.from_shortcode()
-  - GraphImage (foto simple) -> descarga directa
-  - GraphVideo -> extrae primer frame como imagen (muchos son fotos con audio)
-  - GraphSidecar (carousel) -> skip
+  - Consulta tipo con Post.from_shortcode() (1 request a IG)
+  - GraphImage -> descarga imagen directa con requests
+  - GraphVideo -> descarga video con requests, extrae frame con ffmpeg, borra video
+  - GraphSidecar -> skip (carousel)
 
-CADA Post.from_shortcode() CUENTA COMO 1 REQUEST a Instagram
-(sin importar si descargas o no). --max limita requests totales.
+NOTA: NO usa instaloader.download_post() porque tiene un bug de paths en Windows
+(convierte rutas absolutas en nombres de carpeta con caracteres full-width).
+Solo usa instaloader para obtener el tipo y URL del post.
 
 Protecciones anti-ban:
   - Delay de 5s entre requests
   - Pausa larga (3 min) cada 20 posts procesados
   - Límite máximo de posts por sesión (default: 50)
-  - Si detecta error (rate limit, login required) -> para y guarda progreso
+  - Auto-stop si detecta rate limit / login required
 
 Output: memes_descargados/{shortcode}.jpg
 
@@ -25,12 +26,11 @@ Uso:
     python 2_download_memes.py
     python 2_download_memes.py --max 10
 
-Dependencias: instaloader, Pillow (para frames de video si se usa ffmpeg)
+Dependencias: instaloader, requests
 """
 
 import json
 import sys
-import os
 import time
 import random
 import argparse
@@ -38,6 +38,8 @@ import subprocess
 import shutil
 from pathlib import Path
 from datetime import datetime
+
+import requests as req
 
 try:
     import instaloader
@@ -107,59 +109,65 @@ def save_downloads_log(data):
 
 
 def create_instaloader():
-    """Crea instancia de instaloader SIN LOGIN."""
+    """Crea instancia de instaloader SIN LOGIN (solo para queries, no para download)."""
     L = instaloader.Instaloader(
-        download_videos=True,  # Necesitamos descargar video para extraer frame
+        download_videos=False,
         download_video_thumbnails=False,
         download_comments=False,
         download_geotags=False,
         save_metadata=False,
-        compress_json=False,
-        post_metadata_txt_pattern="",
-        filename_pattern="{shortcode}",
     )
     return L
+
+
+def download_file(url, output_path):
+    """
+    Descarga un archivo de una URL directamente con requests.
+    Evita el bug de paths de instaloader en Windows.
+    """
+    try:
+        response = req.get(url, stream=True, timeout=60)
+        response.raise_for_status()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        return output_path.exists() and output_path.stat().st_size > 1000
+    except Exception as e:
+        print(f"       [X] Error descargando archivo: {e}")
+        return False
 
 
 def extract_first_frame(video_path, output_path):
     """
     Extrae el primer frame de un video usando ffmpeg.
-    Muchos "videos" de IG son fotos con audio, así que el primer frame = el meme.
-    
-    Returns:
-        bool: True si se extrajo exitosamente
     """
     try:
         cmd = [
             "ffmpeg", "-y",
             "-i", str(video_path),
             "-vframes", "1",
-            "-q:v", "2",  # Alta calidad JPEG
+            "-q:v", "2",
             str(output_path)
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        
-        if result.returncode == 0 and output_path.exists() and output_path.stat().st_size > 1000:
-            return True
-        else:
-            return False
+        return result.returncode == 0 and output_path.exists() and output_path.stat().st_size > 1000
     except Exception:
         return False
 
 
 def process_shortcode(L, shortcode, stats):
     """
-    Procesa un shortcode: verifica tipo y actúa según el caso.
-    
-    - GraphImage: descarga foto directamente
-    - GraphVideo: descarga video, extrae primer frame, borra video
-    - GraphSidecar: skip (carousel)
+    Procesa un shortcode:
+    1. Obtiene info del post con instaloader (1 request a IG)
+    2. Según el tipo, descarga con requests (NO usa instaloader.download_post)
     
     Returns:
         str: 'foto', 'frame', 'skip_carousel', 'error', 'rate_limit'
     """
     counter = f"[{stats['processed']}/{stats['total']}]"
-    
+
+    # === PASO 1: Obtener info del post ===
     try:
         post = instaloader.Post.from_shortcode(L.context, shortcode)
     except instaloader.exceptions.QueryReturnedNotFoundException:
@@ -167,8 +175,8 @@ def process_shortcode(L, shortcode, stats):
         return "error"
     except instaloader.exceptions.ConnectionException as e:
         error_str = str(e).lower()
-        if "429" in error_str or "rate" in error_str or "login" in error_str or "redirect" in error_str:
-            print(f"   {counter} {shortcode} -> [X] RATE LIMIT / LOGIN REQUIRED")
+        if "429" in error_str or "rate" in error_str or "login" in error_str or "redirect" in error_str or "403" in error_str:
+            print(f"   {counter} {shortcode} -> [X] RATE LIMIT / BLOCKED")
             print("   [!!!] Deteniendo para evitar ban. Progreso guardado.")
             return "rate_limit"
         print(f"   {counter} {shortcode} -> [X] Error conexión: {e}")
@@ -180,78 +188,51 @@ def process_shortcode(L, shortcode, stats):
     typename = post.typename
     MEMES_DIR.mkdir(parents=True, exist_ok=True)
 
-    # === FOTO SIMPLE ===
+    # === GRAPHIMAGE: Descargar foto directa ===
     if typename == "GraphImage":
-        try:
-            L.download_post(post, target=str(MEMES_DIR))
-            # Limpiar archivos extra que instaloader puede crear
-            _cleanup_instaloader_extras(shortcode)
+        image_url = post.url
+        output_path = MEMES_DIR / f"{shortcode}.jpg"
+        success = download_file(image_url, output_path)
+        if success:
             print(f"   {counter} {shortcode} -> [OK] foto descargada")
             return "foto"
-        except Exception as e:
-            print(f"   {counter} {shortcode} -> [X] Error descargando: {e}")
+        else:
+            print(f"   {counter} {shortcode} -> [X] Error descargando imagen")
             return "error"
 
-    # === VIDEO -> EXTRAER PRIMER FRAME ===
+    # === GRAPHVIDEO: Descargar video, extraer frame, borrar video ===
     elif typename == "GraphVideo":
-        try:
-            # Descargar video a carpeta temporal
-            TEMP_DIR.mkdir(parents=True, exist_ok=True)
-            L.download_post(post, target=str(TEMP_DIR))
-            
-            # Buscar el archivo de video descargado
-            video_file = None
-            for f in TEMP_DIR.iterdir():
-                if f.suffix.lower() in ('.mp4', '.webm', '.mov') and shortcode in f.name:
-                    video_file = f
-                    break
-            
-            if not video_file:
-                # Buscar cualquier video en temp
-                for f in TEMP_DIR.iterdir():
-                    if f.suffix.lower() in ('.mp4', '.webm', '.mov'):
-                        video_file = f
-                        break
-            
-            if not video_file:
-                print(f"   {counter} {shortcode} -> [X] Video no encontrado en temp")
-                _cleanup_temp()
-                return "error"
-            
-            # Extraer primer frame
-            output_frame = MEMES_DIR / f"{shortcode}.jpg"
-            success = extract_first_frame(video_file, output_frame)
-            
-            # Limpiar temp
-            _cleanup_temp()
-            
-            if success:
-                print(f"   {counter} {shortcode} -> [OK] frame extraído (era video/foto+audio)")
-                return "frame"
-            else:
-                print(f"   {counter} {shortcode} -> [X] No se pudo extraer frame")
-                return "error"
-                
-        except Exception as e:
-            print(f"   {counter} {shortcode} -> [X] Error procesando video: {e}")
+        video_url = post.video_url
+        TEMP_DIR.mkdir(parents=True, exist_ok=True)
+        temp_video_path = TEMP_DIR / f"{shortcode}.mp4"
+        output_frame_path = MEMES_DIR / f"{shortcode}.jpg"
+
+        # Descargar video
+        success_download = download_file(video_url, temp_video_path)
+        if not success_download:
+            print(f"   {counter} {shortcode} -> [X] Error descargando video")
             _cleanup_temp()
             return "error"
 
-    # === CAROUSEL -> SKIP ===
+        # Extraer primer frame
+        success_frame = extract_first_frame(temp_video_path, output_frame_path)
+        _cleanup_temp()
+
+        if success_frame:
+            print(f"   {counter} {shortcode} -> [OK] frame extraído (video/foto+audio)")
+            return "frame"
+        else:
+            print(f"   {counter} {shortcode} -> [X] Error extrayendo frame")
+            return "error"
+
+    # === GRAPHSIDECAR: Skip ===
     elif typename == "GraphSidecar":
         print(f"   {counter} {shortcode} -> skip (carousel)")
         return "skip_carousel"
 
     else:
-        print(f"   {counter} {shortcode} -> skip (tipo desconocido: {typename})")
+        print(f"   {counter} {shortcode} -> skip (tipo: {typename})")
         return "skip_carousel"
-
-
-def _cleanup_instaloader_extras(shortcode):
-    """Limpia archivos extra que instaloader crea (json, txt, etc)."""
-    for f in MEMES_DIR.iterdir():
-        if shortcode in f.name and f.suffix.lower() not in ('.jpg', '.jpeg', '.png', '.webp'):
-            f.unlink(missing_ok=True)
 
 
 def _cleanup_temp():
@@ -285,8 +266,8 @@ def main():
     print(f"   Carpeta destino: {MEMES_DIR}")
     print("")
     print("   Comportamiento por tipo:")
-    print("     GraphImage   -> descarga foto directa")
-    print("     GraphVideo   -> extrae primer frame (foto con audio)")
+    print("     GraphImage   -> descarga foto directa (con requests)")
+    print("     GraphVideo   -> descarga video, extrae frame, borra video")
     print("     GraphSidecar -> skip (carousel)")
 
     # Cargar pendientes
@@ -307,7 +288,7 @@ def main():
     # Cargar historial de descargas
     downloads_log = load_downloads_log()
 
-    # Crear instaloader
+    # Crear instaloader (solo para queries)
     L = create_instaloader()
 
     # Procesar
@@ -369,8 +350,6 @@ def main():
     links_data["por_descargar"] = [sc for sc in por_descargar if sc not in processed_shortcodes]
     save_links(links_data)
     save_downloads_log(downloads_log)
-
-    # Limpiar temp por si quedó algo
     _cleanup_temp()
 
     # Resumen
