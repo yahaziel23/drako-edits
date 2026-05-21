@@ -20,6 +20,7 @@ Dependencias: selenium, webdriver-manager
 import json
 import time
 import re
+import subprocess
 from pathlib import Path
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -60,6 +61,29 @@ DELAY_ENTRE_PERFILES = 5  # Segundos entre perfiles
 # FUNCIONES
 # =============================================================================
 
+def get_brave_version():
+    """
+    Detecta la versión major de Brave automáticamente.
+    Esto evita el mismatch entre ChromeDriver y Brave.
+    """
+    try:
+        # Brave soporta --version en Windows
+        result = subprocess.run(
+            [BRAVE_PATH, "--version"],
+            capture_output=True, text=True, timeout=10
+        )
+        # Output: "Brave Browser 148.0.7778.167" o similar
+        version_match = re.search(r'(\d+)\.\d+\.\d+\.\d+', result.stdout)
+        if version_match:
+            return int(version_match.group(1))
+    except Exception:
+        pass
+
+    # Fallback: intentar extraer del path/registry
+    # Si no se puede detectar, retorna None y webdriver-manager intentará solo
+    return None
+
+
 def load_historial():
     """Carga historial de links ya scrapeados."""
     if LINKS_FILE.exists():
@@ -81,6 +105,7 @@ def create_driver():
     """
     Crea el driver de Selenium con Brave.
     Abre Brave VISIBLE (no headless) para permitir login manual.
+    Detecta versión de Brave para descargar ChromeDriver compatible.
     """
     options = Options()
     options.binary_location = BRAVE_PATH
@@ -96,7 +121,16 @@ def create_driver():
     # Ventana grande para ver bien el grid
     options.add_argument("--window-size=1400,900")
 
-    service = Service(ChromeDriverManager().install())
+    # Detectar versión de Brave y descargar ChromeDriver compatible
+    brave_version = get_brave_version()
+    if brave_version:
+        print(f"   Brave versión detectada: {brave_version}")
+        # Forzar ChromeDriver de la misma major version
+        service = Service(ChromeDriverManager(driver_version=f"{brave_version}").install())
+    else:
+        print(f"   [!] No se pudo detectar versión de Brave, intentando automático...")
+        service = Service(ChromeDriverManager().install())
+
     driver = webdriver.Chrome(service=service, options=options)
 
     # Quitar la propiedad navigator.webdriver
@@ -270,9 +304,9 @@ def main():
         # Scrapeear cada perfil
         todos_nuevos = []
         for i, username in enumerate(PERFILES_TARGET):
-            print(f"\n{'─' * 60}")
+            print(f"\n{'\u2500' * 60}")
             print(f"   PERFIL {i+1}/{len(PERFILES_TARGET)}: @{username}")
-            print(f"{'─' * 60}")
+            print(f"{'\u2500' * 60}")
 
             nuevos = scrape_profile(driver, username, historial)
             todos_nuevos.extend(nuevos)
