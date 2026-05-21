@@ -41,6 +41,7 @@ import random
 import argparse
 import subprocess
 import shutil
+import logging
 from pathlib import Path
 from datetime import datetime
 
@@ -52,6 +53,9 @@ except ImportError:
     print("   [X] Necesitas instalar instaloader:")
     print("       pip install instaloader")
     sys.exit(1)
+
+# Silenciar los warnings de instaloader (403 retry, etc.)
+logging.getLogger('instaloader').setLevel(logging.ERROR)
 
 
 # =============================================================================
@@ -156,6 +160,7 @@ def create_instaloader():
         download_comments=False,
         download_geotags=False,
         save_metadata=False,
+        quiet=True,
     )
     return L
 
