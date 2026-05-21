@@ -90,8 +90,16 @@ def save_catalogo(data):
 
 
 def get_cataloged_filenames(catalogo):
-    """Obtiene filenames ya catalogados para no repetir."""
-    return {clip["filename"] for clip in catalogo.get("clips", [])}
+    """Obtiene filenames ORIGINALES ya catalogados para no repetir."""
+    names = set()
+    for clip in catalogo.get("clips", []):
+        # Usar filename_original (nombre real del source) para comparar en browse_folder
+        if "filename_original" in clip:
+            names.add(clip["filename_original"])
+        else:
+            # Fallback para clips viejos que no tengan filename_original
+            names.add(clip.get("filename", ""))
+    return names
 
 
 # =============================================================================
@@ -482,7 +490,6 @@ def main():
             print(f"     {cat}: {count}")
 
     print(f"   Guardado en: {CATALOGO_FILE}")
-    print(f"   Clips en: {CLIPS_DIR}")
     print(SEPARATOR_EQ)
 
 
