@@ -63,7 +63,7 @@ DELAY_ENTRE_CALLS = 2     # Segundos entre llamadas a OpenAI
 
 # --- OPENAI ---
 MODEL = "gpt-4o"          # Modelo con vision
-MAX_TOKENS = 1200         # Tokens máximos de respuesta (más campos = más tokens)
+MAX_TOKENS = 1800         # Tokens máximos de respuesta (más campos = más tokens)
 
 # --- CATEGORIAS ---
 CATEGORIAS = [

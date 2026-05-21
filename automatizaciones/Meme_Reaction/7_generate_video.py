@@ -5,11 +5,14 @@ Paso 7: Generacion de Video (Meme Reaction)
 
 Toma los memes matcheados (paso 4) y genera videos usando la logica del generator.
 Por cada match:
-  - Meme: memes_descargados/{shortcode}.jpg (con crop de franjas si aplica)
+  - Meme: memes_descargados/{shortcode}.jpg (con crop de franjas PROGRAMATICO)
   - Clip: clips/{clip_id}.mp4 (copia local catalogada)
   - Audio: SIEMPRE del clip (no se puede elegir audio externo en automatizacion)
   - Caption: del match (paso 4)
   - Auto-crop clip: habilitado (barras negras del clip)
+
+Deteccion de franjas negras del meme: PROGRAMATICA (escanea pixels reales).
+NO depende de la clasificacion IA (detail:low es impreciso para bordes).
 
 Tambien genera el JSON config (paso 8) automaticamente.
 
@@ -90,10 +93,10 @@ CAPTION_SIZES = {
     "XL": 110,
 }
 
-# Auto-crop config (para barras negras del CLIP)
-BLACK_BAR_THRESHOLD = 15
-BLACK_BAR_MIN_ROWS = 5
-MAX_CROP_RATIO = 0.30
+# Auto-crop config (para barras negras de MEME y CLIP)
+BLACK_BAR_THRESHOLD = 15    # Mean pixel value debajo de esto = "negro"
+BLACK_BAR_MIN_ROWS = 8      # Minimo de filas para considerar "franja" (no ruido)
+MAX_CROP_RATIO = 0.30       # Nunca cropear mas del 30% del alto total
 
 MAX_POR_SESION = 10
 
@@ -174,26 +177,53 @@ def get_pending_generations(matches, generados):
 
 
 # =============================================================================
-# FUNCIONES - VIDEO GENERATION (del generator)
+# FUNCIONES - DETECCION PROGRAMATICA DE BARRAS NEGRAS
 # =============================================================================
 
-def find_font():
-    """Busca una fuente bold disponible en el sistema."""
-    font_paths = [
-        "C:/Windows/Fonts/impact.ttf",
-        "C:/Windows/Fonts/IMPACT.TTF",
-        "C:/Windows/Fonts/arialbd.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/System/Library/Fonts/Helvetica.ttc",
-    ]
-    for p in font_paths:
-        if Path(p).exists():
-            return p
-    return None
+def detect_black_bars_image(image_path):
+    """
+    Detecta barras negras arriba y abajo de una IMAGEN (meme) por pixels reales.
+    NO depende de la IA - escanea directamente los valores de pixel.
+    Retorna (top_pixels, bottom_pixels) a cropear.
+    """
+    img = Image.open(image_path).convert("RGB")
+    arr = np.array(img)
+    height = arr.shape[0]
+
+    # Calcular mean de cada fila
+    row_means = np.mean(arr, axis=(1, 2))  # mean de R,G,B por fila
+
+    # Detectar barras arriba
+    top_crop = 0
+    for row in range(height):
+        if row_means[row] < BLACK_BAR_THRESHOLD:
+            top_crop = row + 1
+        else:
+            break
+
+    # Detectar barras abajo
+    bottom_crop = 0
+    for row in range(height - 1, -1, -1):
+        if row_means[row] < BLACK_BAR_THRESHOLD:
+            bottom_crop = height - row
+        else:
+            break
+
+    # Minimo de filas para no ser ruido
+    if top_crop < BLACK_BAR_MIN_ROWS:
+        top_crop = 0
+    if bottom_crop < BLACK_BAR_MIN_ROWS:
+        bottom_crop = 0
+
+    # Safety: nunca cropear mas del MAX_CROP_RATIO
+    if top_crop + bottom_crop > int(height * MAX_CROP_RATIO):
+        return 0, 0
+
+    return top_crop, bottom_crop
 
 
 def detect_black_bars(frame):
-    """Detecta barras negras arriba y abajo de un frame."""
+    """Detecta barras negras arriba y abajo de un frame de video."""
     if len(frame.shape) == 3:
         gray = np.mean(frame, axis=2)
     else:
@@ -224,7 +254,7 @@ def detect_black_bars(frame):
 
 
 def detect_black_bars_multiframe(video_clip):
-    """Detecta barras negras muestreando multiples frames."""
+    """Detecta barras negras del clip muestreando multiples frames."""
     clip_duration = video_clip.duration
     height = video_clip.size[1]
 
@@ -251,6 +281,59 @@ def detect_black_bars_multiframe(video_clip):
         return 0, 0
 
     return best_top, best_bottom
+
+
+def crop_meme_franjas(meme_path):
+    """
+    Detecta y cropea franjas negras del meme PROGRAMATICAMENTE.
+    Escanea los pixels reales de la imagen — NO depende de la IA.
+    Retorna path a imagen cropeada (temp) o la original si no hay crop.
+    """
+    top_crop, bottom_crop = detect_black_bars_image(meme_path)
+
+    if top_crop == 0 and bottom_crop == 0:
+        return meme_path
+
+    img = Image.open(meme_path)
+    w, h = img.size
+
+    new_top = top_crop
+    new_bottom = h - bottom_crop
+
+    if new_top >= new_bottom:
+        return meme_path
+
+    cropped = img.crop((0, new_top, w, new_bottom))
+
+    # Guardar como temp
+    temp_path = meme_path.parent / f"_temp_crop_{meme_path.name}"
+    cropped.save(temp_path, quality=95)
+
+    top_pct = top_crop / h * 100
+    bot_pct = bottom_crop / h * 100
+    print(f"   [meme-crop] Franjas: top={top_crop}px ({top_pct:.0f}%), bottom={bottom_crop}px ({bot_pct:.0f}%)")
+    print(f"   [meme-crop] {h}px -> {new_bottom - new_top}px")
+
+    return temp_path
+
+
+# =============================================================================
+# FUNCIONES - VIDEO GENERATION
+# =============================================================================
+
+def find_font():
+    """Busca una fuente bold disponible en el sistema."""
+    font_paths = [
+        "C:/Windows/Fonts/impact.ttf",
+        "C:/Windows/Fonts/IMPACT.TTF",
+        "C:/Windows/Fonts/arialbd.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+    ]
+    for p in font_paths:
+        if Path(p).exists():
+            return p
+    return None
 
 
 def fit_image_to_area(img, area_width, area_height, bg_color=(255, 255, 255)):
@@ -333,37 +416,6 @@ def render_caption(text, font_path, font_size):
     return np.array(img)
 
 
-def crop_meme_franjas(meme_path, franjas):
-    """
-    Pre-cropea el meme si tiene franjas negras segun la clasificacion IA.
-    Retorna path a imagen cropeada (temp) o la original si no hay crop.
-    """
-    if not franjas or not franjas.get("tiene"):
-        return meme_path
-
-    crop_arriba = franjas.get("crop_arriba", False)
-    crop_abajo = franjas.get("crop_abajo", False)
-
-    if not crop_arriba and not crop_abajo:
-        return meme_path
-
-    img = Image.open(meme_path)
-    w, h = img.size
-
-    top = int(h * franjas.get("arriba", 0)) if crop_arriba else 0
-    bottom = h - int(h * franjas.get("abajo", 0)) if crop_abajo else h
-
-    if top >= bottom:
-        return meme_path
-
-    cropped = img.crop((0, top, w, bottom))
-
-    # Guardar como temp
-    temp_path = meme_path.parent / f"_temp_crop_{meme_path.name}"
-    cropped.save(temp_path, quality=95)
-    return temp_path
-
-
 def auto_caption_size(caption_text):
     """Determina tamano del caption automaticamente segun longitud."""
     if not caption_text:
@@ -403,14 +455,14 @@ def generate_meme_reaction(meme_path, clip_path, caption_text, caption_size_key,
     top_crop, bottom_crop = detect_black_bars_multiframe(video_clip)
     if top_crop > 0 or bottom_crop > 0:
         orig_h = video_clip.size[1]
-        print(f"   [auto-crop] Barras: top={top_crop}px, bottom={bottom_crop}px")
+        print(f"   [clip-crop] Barras: top={top_crop}px, bottom={bottom_crop}px")
         video_clip = video_clip.cropped(
             x1=0, y1=top_crop,
             x2=video_clip.size[0], y2=video_clip.size[1] - bottom_crop
         )
-        print(f"   [auto-crop] {orig_h}px -> {video_clip.size[1]}px")
+        print(f"   [clip-crop] {orig_h}px -> {video_clip.size[1]}px")
     else:
-        print(f"   [auto-crop] Sin barras negras")
+        print(f"   [clip-crop] Sin barras negras")
 
     clip_size = video_clip.size
 
@@ -511,7 +563,7 @@ def save_config_json(shortcode, match_data, clasificacion, clip_info, output_pat
         "accuracy": match_data.get("accuracy", 0),
         "audio_source": "clip",
         "auto_crop_clip": True,
-        "franjas_negras": clasificacion.get("franjas_negras") if clasificacion else None,
+        "auto_crop_meme": True,
         "background_color": clasificacion.get("background_color", "blanco") if clasificacion else "blanco",
         "output_name": output_path.name if output_path else None,
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -649,9 +701,8 @@ def main():
                 print("\n   [SALIR] Progreso guardado.")
                 break
 
-        # Pre-crop franjas negras del meme (si aplica)
-        franjas = clasificacion.get("franjas_negras") if clasificacion else None
-        actual_meme_path = crop_meme_franjas(meme_path, franjas)
+        # Crop franjas negras del meme PROGRAMATICAMENTE (no depende de IA)
+        actual_meme_path = crop_meme_franjas(meme_path)
 
         # Determinar background color
         bg_key = clasificacion.get("background_color", "blanco") if clasificacion else "blanco"
