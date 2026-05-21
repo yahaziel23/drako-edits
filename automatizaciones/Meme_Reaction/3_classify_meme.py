@@ -19,6 +19,9 @@ Output: historial/clasificaciones.json
 Uso:
     python 3_classify_meme.py
     python 3_classify_meme.py --max 10
+    python 3_classify_meme.py --redo ABC123          # Re-clasificar uno específico
+    python 3_classify_meme.py --redo ABC123 DEF456   # Re-clasificar varios
+    python 3_classify_meme.py --redo-all             # Re-clasificar TODOS
 
 Dependencias: openai, python-dotenv, Pillow
 """
@@ -107,6 +110,22 @@ def save_clasificaciones(data):
     CLASIFICACIONES_FILE.write_text(
         json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+
+
+def remove_from_clasificaciones(clasificaciones, shortcodes_to_redo):
+    """
+    Remueve shortcodes de clasificados/skipped/errores para re-procesarlos.
+    Retorna cuantos se removieron.
+    """
+    removed = 0
+    for key in ["clasificados", "skipped_video_content", "errores"]:
+        original_len = len(clasificaciones.get(key, []))
+        clasificaciones[key] = [
+            item for item in clasificaciones.get(key, [])
+            if item["shortcode"] not in shortcodes_to_redo
+        ]
+        removed += original_len - len(clasificaciones[key])
+    return removed
 
 
 def get_image_source_type(shortcode, downloads_log):
@@ -198,11 +217,14 @@ Reglas:
   * Captions que le añadan humor al video
   * Si el meme tiene estructura "X / Yo:" sugiere split con el contraste
 - "background_color": el color predominante del fondo del meme (para elegir fondo del video final)
-- "franjas_negras": detecta bordes/padding negro arriba/abajo.
-  * "arriba" y "abajo": valor decimal (0.0 a 1.0) del porcentaje de la imagen que es franja. Ej: 15% = 0.15
-  * "crop_arriba": true si se PUEDE cortar (no hay texto importante en la franja de arriba), false si hay texto
-  * "crop_abajo": true si se PUEDE cortar (no hay texto importante en la franja de abajo), false si hay texto
-  * IMPORTANTE: evalúa arriba y abajo POR SEPARADO. Puede haber texto arriba pero no abajo.
+- "franjas_negras": MIRA CON CUIDADO los bordes de la imagen. Detecta bandas/barras/padding de color sólido (generalmente negro pero puede ser de otro color oscuro) arriba y/o abajo que NO son parte del contenido del meme.
+  * "tiene": true si hay AL MENOS una franja arriba O abajo. Mira los pixeles de los bordes superior e inferior.
+  * "arriba": porcentaje de la imagen que es franja ARRIBA (0.0 si no hay). Ej: si el 15% superior es barra negra = 0.15. SE PRECISO, mide visualmente.
+  * "abajo": porcentaje de la imagen que es franja ABAJO (0.0 si no hay). Ej: si el 10% inferior es barra negra = 0.10. SE PRECISO, mide visualmente.
+  * "crop_arriba": true si la franja de arriba se puede cortar SIN perder texto ni contenido importante. false si hay texto/watermark en la franja.
+  * "crop_abajo": true si la franja de abajo se puede cortar SIN perder texto ni contenido importante. false si hay texto/watermark en la franja.
+  * IMPORTANTE: Si la imagen TIENE franjas visibles, "tiene" DEBE ser true y los valores de arriba/abajo DEBEN reflejar el porcentaje real. No pongas 0.0 si ves una franja.
+  * Evalúa arriba y abajo POR SEPARADO. Puede haber texto arriba pero no abajo.
 - "dia_especial": si el meme SOLO tiene sentido en un día/fecha específica. Analiza el contexto completo:
   * "día 31" + "todo el año" = fin_de_ano (NO halloween)
   * "es viernes" = viernes
@@ -296,6 +318,10 @@ def main():
     parser = argparse.ArgumentParser(description="Paso 3: Clasificar memes con IA")
     parser.add_argument("--max", type=int, default=MAX_POR_SESION,
                         help=f"Máximo de imágenes a clasificar (default: {MAX_POR_SESION})")
+    parser.add_argument("--redo", nargs="+", metavar="SHORTCODE",
+                        help="Re-clasificar shortcodes específicos (los remueve de clasificados y re-procesa)")
+    parser.add_argument("--redo-all", action="store_true",
+                        help="Re-clasificar TODOS los memes (borra clasificaciones y re-procesa)")
     args = parser.parse_args()
     max_sesion = args.max
 
@@ -335,6 +361,25 @@ def main():
     downloads_log = load_downloads_log()
     clasificaciones = load_clasificaciones()
 
+    # --- REDO: remover de clasificados para re-procesar ---
+    if args.redo_all:
+        total_prev = len(clasificaciones.get("clasificados", []))
+        clasificaciones["clasificados"] = []
+        clasificaciones["skipped_video_content"] = []
+        clasificaciones["errores"] = []
+        save_clasificaciones(clasificaciones)
+        print(f"\n   [REDO-ALL] Eliminadas {total_prev} clasificaciones. Re-procesando todo.")
+
+    elif args.redo:
+        shortcodes_to_redo = set(args.redo)
+        removed = remove_from_clasificaciones(clasificaciones, shortcodes_to_redo)
+        save_clasificaciones(clasificaciones)
+        if removed > 0:
+            print(f"\n   [REDO] Removidos {removed} entries para re-clasificar: {', '.join(args.redo)}")
+        else:
+            print(f"\n   [REDO] Shortcodes no encontrados en clasificaciones: {', '.join(args.redo)}")
+            print(f"          (puede que ya estén pendientes)")
+
     # Obtener imágenes pendientes
     pending = get_pending_images(clasificaciones)
     if not pending:
@@ -343,6 +388,15 @@ def main():
         return
 
     print(f"   Imágenes pendientes: {len(pending)}")
+
+    # Si es --redo, filtrar solo los que pidió
+    if args.redo:
+        redo_set = set(args.redo)
+        pending = [p for p in pending if p.stem in redo_set]
+        if not pending:
+            print(f"\n   [!] Las imágenes de --redo no existen en memes_descargados/")
+            return
+        print(f"   Re-clasificando: {len(pending)} (--redo)")
 
     # Limitar
     batch = pending[:max_sesion]
@@ -417,7 +471,12 @@ def main():
             cats_str = ", ".join(categorias)
             n_ideas = len(ideas_video)
             dia_str = f" [{dia_especial}]" if dia_especial else ""
-            print(f" -> {cats_str} ({n_ideas} ideas){dia_str}")
+            franjas_str = ""
+            if franjas_negras.get("tiene"):
+                f_arr = franjas_negras.get('arriba', 0)
+                f_abj = franjas_negras.get('abajo', 0)
+                franjas_str = f" [franjas: arr={f_arr:.0%} abj={f_abj:.0%}]"
+            print(f" -> {cats_str} ({n_ideas} ideas){dia_str}{franjas_str}")
             stats["clasificados"] += 1
             clasificaciones["clasificados"].append({
                 "shortcode": shortcode,
