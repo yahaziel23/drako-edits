@@ -130,6 +130,9 @@ def build_catalogo_text(catalogo):
     return "\n".join(lines)
 
 
+CLIP_IDEAL_RULE = 'Para clip_ideal: se ESPECIFICO. No digas "alguien riendo", di "el clip viral de [persona/personaje] haciendo [cosa especifica]"'
+
+
 def match_meme_with_clips(client, meme_data, catalogo_text):
     """
     La IA analiza el meme y sugiere el mejor clip del catalogo.
@@ -149,27 +152,27 @@ def match_meme_with_clips(client, meme_data, catalogo_text):
             ideas_lines.append(f"  Idea {i}: formato={fmt}, caption=\"{cap}\", clip_ideal=\"{clip}\"")
         ideas_text = "\n".join(ideas_lines)
 
-    prompt = f"""Eres un experto en contenido viral de memes/reels. Tu trabajo es hacer match entre un meme y un clip de reacción para crear un video corto tipo "meme reaction".
+    prompt = f"""Eres un experto en contenido viral de memes/reels. Tu trabajo es hacer match entre un meme y un clip de reaccion para crear un video corto tipo meme reaction.
 
 MEME A MATCHEAR:
-- Categorías: {categorias}
-- Descripción: "{descripcion}"
-- Ideas previas del análisis:
+- Categorias: {categorias}
+- Descripcion: "{descripcion}"
+- Ideas previas del analisis:
 {ideas_text}
 
-CATÁLOGO DE CLIPS DISPONIBLES:
+CATALOGO DE CLIPS DISPONIBLES:
 {catalogo_text}
 
 Tu tarea:
-1. MEJOR MATCH: Elige el clip del catálogo que MEJOR queda con este meme. Da un porcentaje de qué tan bien queda (0-100%). Sé HONESTO — si ninguno queda bien, dilo.
+1. MEJOR MATCH: Elige el clip del catalogo que MEJOR queda con este meme. Da un porcentaje de que tan bien queda (0-100%). Se HONESTO - si ninguno queda bien, dilo.
 
-2. CAPTION: ¿El video necesita un caption superpuesto? Si el meme habla por sí solo, di "sin caption". Si sí necesita, sugiere uno corto (máx 2 líneas). El caption debe añadir humor, no repetir lo que ya dice el meme.
+2. CAPTION: El video necesita un caption superpuesto? Si el meme habla por si solo, di sin caption. Si si necesita, sugiere uno corto (max 2 lineas). El caption debe anadir humor, no repetir lo que ya dice el meme.
 
-3. CLIP IDEAL: Describe qué clip sería PERFECTO para este meme (aunque no esté en el catálogo). Da ejemplos concretos y virales. Por ejemplo:
-   - "El clip de Michael Jackson comiendo palomitas del video Thriller"
-   - "El meme de Pedro Pascal llorando y riendo al mismo tiempo"
-   - "El clip viral del señor viejito asintiendo con orgullo (slow clap)"
-   - "El de Bugs Bunny serruchando Florida"
+3. CLIP IDEAL: Describe que clip seria PERFECTO para este meme (aunque no este en el catalogo). Da ejemplos concretos y virales. Por ejemplo:
+   - El clip de Michael Jackson comiendo palomitas del video Thriller
+   - El meme de Pedro Pascal llorando y riendo al mismo tiempo
+   - El clip viral del senor viejito asintiendo con orgullo (slow clap)
+   - El de Bugs Bunny serruchando Florida
    Piensa en clips que se hayan hecho virales en TikTok/Reels.
 
 4. IDEAS ALTERNATIVAS: Si se te ocurren otros formatos creativos (split screen, otro clip, otro caption), mencionalos brevemente.
@@ -179,10 +182,10 @@ Responde en este formato JSON (sin markdown, sin ```):
   "mejor_match": {{
     "clip_id": "id_del_clip" | null,
     "accuracy": 0-100,
-    "razon": "por qué este clip queda (o no queda)"
+    "razon": "por que este clip queda (o no queda)"
   }},
   "caption": null | "texto del caption",
-  "clip_ideal": "descripción del clip perfecto con ejemplo viral concreto",
+  "clip_ideal": "descripcion del clip perfecto con ejemplo viral concreto",
   "ideas_alternativas": [
     "idea 1 breve",
     "idea 2 breve"
@@ -190,12 +193,13 @@ Responde en este formato JSON (sin markdown, sin ```):
 }}
 
 REGLAS:
-- Si el catálogo está vacío o ningún clip queda arriba de 40%, pon clip_id: null
+- Si el catalogo esta vacio o ningun clip queda arriba de 40%, pon clip_id: null
 - accuracy < 40% = no vale la pena, mejor buscar otro
 - accuracy 40-70% = funciona pero no es ideal
 - accuracy > 70% = buen match
-- Para caption: piensa si REALMENTE añade algo. Muchos memes son mejores sin caption.
-- Para clip_ideal: sé ESPECÍFICO. No digas "alguien riendo", di "el clip viral de [persona/personaje] haciendo [cosa específica]""""
+- Para caption: piensa si REALMENTE anade algo. Muchos memes son mejores sin caption.
+- {CLIP_IDEAL_RULE}
+"""
 
     try:
         response = client.chat.completions.create(
