@@ -3,12 +3,15 @@
 """
 Paso 3: Clasificación del Meme con IA (OpenAI Vision)
 
-Lee imágenes de memes_descargados/ y las clasifica usando GPT-4o Vision.
-Para cada imagen:
-  - Verifica si es foto directa o frame de video (desde posts_descargados.json)
-  - Envía a OpenAI con contexto apropiado
-  - Si es frame de video, la IA puede decir "esto solo tiene sentido como video" -> skip
-  - Si es meme válido, categoriza el tipo de humor/remate
+Lee imágenes de memes_descargados/ y las analiza con GPT-4o Vision.
+Extrae el máximo de info en UNA sola llamada para no repetir análisis:
+  - Validez (es meme o no)
+  - Es video real (frame que no funciona solo)
+  - Descripción detallada (contexto para caption en paso 6)
+  - Categorías (puede ser más de una)
+  - Franjas negras (instrucciones de crop)
+  - Color de fondo (para el video final)
+  - Día especial (viernes, halloween, navidad, etc.)
 
 Output: historial/clasificaciones.json
 
@@ -56,7 +59,7 @@ DELAY_ENTRE_CALLS = 2     # Segundos entre llamadas a OpenAI
 
 # --- OPENAI ---
 MODEL = "gpt-4o"          # Modelo con vision
-MAX_TOKENS = 600          # Tokens máximos de respuesta
+MAX_TOKENS = 800          # Tokens máximos de respuesta (más campos = más tokens)
 
 # --- CATEGORIAS ---
 CATEGORIAS = [
@@ -84,7 +87,7 @@ def load_downloads_log():
             return json.loads(DOWNLOADS_FILE.read_text(encoding="utf-8"))
         except Exception:
             pass
-    return {"descargados_foto": [], "descargados_frame": [], "skipped_carousels": [], "errores": []}
+    return {"descargados_foto": [], "descargados_frame": [], "skipped_carousels": [], "skipped_low_likes": [], "errores": []}
 
 
 def load_clasificaciones():
@@ -128,15 +131,8 @@ def encode_image_base64(image_path):
 
 def classify_meme(client, image_path, source_type):
     """
-    Envía imagen a OpenAI Vision y obtiene clasificación.
-    
-    Args:
-        client: OpenAI client
-        image_path: Path a la imagen
-        source_type: 'foto' o 'frame' (determina el prompt)
-    
-    Returns:
-        dict con keys: valido, categoria, confianza, razon, es_video_real
+    Envía imagen a OpenAI Vision y obtiene análisis completo.
+    Extrae TODO en una sola llamada para no repetir (costo de imagen es fijo).
     """
     image_b64 = encode_image_base64(image_path)
 
@@ -146,10 +142,10 @@ def classify_meme(client, image_path, source_type):
 Muchos de estos videos son simplemente una foto estática con música de fondo (la imagen ES el meme).
 Pero algunos son videos reales donde el humor viene del movimiento/acción.
 
-Si la imagen parece un meme completo por sí sola (tiene texto, es una imagen graciosa, etc.), 
-clasíficala normalmente.
-Si la imagen NO tiene sentido como meme estático (es un frame de acción, alguien hablando, 
-una escena que necesita contexto de video), marca como "es_video_real": true."""
+Si la imagen parece un meme completo por sí sola (tiene texto, es una imagen graciosa, etc.),
+analízala normalmente.
+Si la imagen NO tiene sentido como meme estático (es un frame de acción, alguien hablando,
+una escena que necesita contexto de video), marca "es_video_real": true."""
     else:
         context_note = "Esta imagen es una foto/post directo de Instagram. Es un meme estático."
 
@@ -157,7 +153,7 @@ una escena que necesita contexto de video), marca como "es_video_real": true."""
 
     prompt = f"""{context_note}
 
-Analiza esta imagen y clasifícala.
+Analiza esta imagen a fondo. Necesito TODA la info posible en UNA sola llamada.
 
 Categorías disponibles: {categorias_str}
 
@@ -165,16 +161,31 @@ Responde EXCLUSIVAMENTE en este formato JSON (sin markdown, sin ```):
 {{
   "valido": true/false,
   "es_video_real": true/false,
-  "categoria": "nombre_categoria",
+  "categorias": ["cat1", "cat2"],
   "confianza": 0.0-1.0,
-  "razon": "breve explicación de por qué esta categoría"
+  "descripcion": "Descripción detallada del meme: qué muestra, qué texto tiene, cuál es el chiste/remate. Escríbela como si alguien que NO ve la imagen pudiera entender el humor.",
+  "background_color": "negro" | "blanco" | "otro",
+  "franjas_negras": {{
+    "tiene": true/false,
+    "arriba_px_pct": "porcentaje aproximado de la imagen que es franja negra arriba (ej: 10%)",
+    "abajo_px_pct": "porcentaje aproximado abajo",
+    "tiene_texto_en_franjas": true/false,
+    "instruccion_crop": "Descripción de cómo recortar: ej 'Cortar 10% arriba y 15% abajo, no hay texto en las franjas' o 'NO cortar, hay texto blanco en la franja negra de arriba'"
+  }},
+  "dia_especial": null | "viernes" | "lunes" | "halloween" | "navidad" | "fin_de_ano" | "san_valentin" | "otro: [cual]",
+  "razon": "breve explicación de por qué estas categorías"
 }}
 
 Reglas:
-- "valido": false si no es un meme (es publicidad, selfie, paisaje, etc.)
+- "valido": false si no es un meme (es publicidad, selfie, paisaje, promoción, etc.)
 - "es_video_real": true si la imagen claramente es un frame de video que no funciona como meme estático
-- Si "valido" es false o "es_video_real" es true, pon categoria como "none"
-- "confianza": qué tan seguro estás de la categoría (0.5 = dudoso, 1.0 = obvio)"""
+- Si "valido" es false o "es_video_real" es true, pon categorias como [] y descripcion como breve razón
+- "categorias": puede tener 1 a 3 categorías que apliquen (de más relevante a menos)
+- "confianza": qué tan seguro estás de la clasificación (0.5 = dudoso, 1.0 = obvio)
+- "descripcion": DETALLADA. Incluye texto visible, contexto cultural, el remate. Es para que otro modelo genere un caption SIN ver la imagen.
+- "background_color": el color predominante del fondo del meme (para elegir fondo del video final)
+- "franjas_negras": detecta bordes/padding negro arriba/abajo (común en screenshots de video)
+- "dia_especial": si el meme SOLO tiene sentido en un día/fecha específica (viernes, halloween, etc.). null si es atemporal."""
 
     try:
         response = client.chat.completions.create(
@@ -210,11 +221,15 @@ Reglas:
         return result
 
     except json.JSONDecodeError:
-        return {"valido": False, "es_video_real": False, "categoria": "none",
-                "confianza": 0, "razon": f"Error parseando respuesta: {content[:100]}"}
+        return {"valido": False, "es_video_real": False, "categorias": [], "confianza": 0,
+                "descripcion": "", "background_color": "otro",
+                "franjas_negras": {"tiene": False}, "dia_especial": None,
+                "razon": f"Error parseando respuesta: {content[:200]}"}
     except Exception as e:
-        return {"valido": False, "es_video_real": False, "categoria": "none",
-                "confianza": 0, "razon": f"Error API: {str(e)[:100]}"}
+        return {"valido": False, "es_video_real": False, "categorias": [], "confianza": 0,
+                "descripcion": "", "background_color": "otro",
+                "franjas_negras": {"tiene": False}, "dia_especial": None,
+                "razon": f"Error API: {str(e)[:200]}"}
 
 
 def get_pending_images(clasificaciones):
@@ -262,11 +277,19 @@ def main():
 
     print("")
     print(SEPARATOR_EQ)
-    print("   MEME REACTION - PASO 3: CLASIFICACIÓN IA")
+    print("   MEME REACTION - PASO 3: ANÁLISIS IA COMPLETO")
     print(SEPARATOR_EQ)
     print(f"   Modelo: {MODEL}")
     print(f"   Máximo por sesión: {max_sesion}")
     print(f"   Carpeta memes: {MEMES_DIR}")
+    print("")
+    print("   Extrae por imagen:")
+    print("     - Validez + es_video_real")
+    print("     - Categorías (1-3)")
+    print("     - Descripción detallada (para caption)")
+    print("     - Franjas negras + instrucciones crop")
+    print("     - Background color")
+    print("     - Día especial (viernes, halloween, etc.)")
 
     # Cargar .env
     if ENV_FILE.exists():
@@ -306,7 +329,7 @@ def main():
     # Procesar
     print("")
     print(SEPARATOR)
-    print("   CLASIFICANDO...")
+    print("   ANALIZANDO...")
     print(SEPARATOR)
 
     stats = {"clasificados": 0, "video_real": 0, "no_valido": 0, "errores": 0}
@@ -314,7 +337,7 @@ def main():
     for i, image_path in enumerate(batch):
         shortcode = image_path.stem
         source_type = get_image_source_type(shortcode, downloads_log)
-        source_label = "(frame de video)" if source_type == "frame" else "(foto directa)"
+        source_label = "(frame)" if source_type == "frame" else "(foto)"
 
         print(f"   [{i+1}/{len(batch)}] {shortcode} {source_label}...", end="")
 
@@ -324,28 +347,34 @@ def main():
         # Procesar resultado
         es_video_real = result.get("es_video_real", False)
         valido = result.get("valido", False)
-        categoria = result.get("categoria", "none")
+        categorias = result.get("categorias", [])
         confianza = result.get("confianza", 0)
+        descripcion = result.get("descripcion", "")
+        background_color = result.get("background_color", "otro")
+        franjas_negras = result.get("franjas_negras", {"tiene": False})
+        dia_especial = result.get("dia_especial", None)
         razon = result.get("razon", "")
 
         if es_video_real:
-            print(f" -> SKIP (es video real, no meme estático)")
+            print(f" -> SKIP (video real)")
             stats["video_real"] += 1
             clasificaciones["skipped_video_content"].append({
                 "shortcode": shortcode,
+                "descripcion": descripcion,
                 "razon": razon,
                 "fecha": now,
             })
         elif not valido:
-            print(f" -> NO VÁLIDO ({razon[:50]})")
+            cats_str = ", ".join(categorias) if categorias else "none"
+            print(f" -> NO VALIDO ({razon[:40]})")
             stats["no_valido"] += 1
             clasificaciones["skipped_video_content"].append({
                 "shortcode": shortcode,
                 "razon": f"No es meme: {razon}",
                 "fecha": now,
             })
-        elif categoria == "none" or confianza == 0:
-            print(f" -> ERROR ({razon[:50]})")
+        elif not categorias or confianza == 0:
+            print(f" -> ERROR ({razon[:40]})")
             stats["errores"] += 1
             clasificaciones["errores"].append({
                 "shortcode": shortcode,
@@ -353,14 +382,20 @@ def main():
                 "fecha": now,
             })
         else:
-            print(f" -> {categoria} (conf: {confianza})")
+            cats_str = ", ".join(categorias)
+            dia_str = f" [{dia_especial}]" if dia_especial else ""
+            print(f" -> {cats_str} (conf: {confianza}){dia_str}")
             stats["clasificados"] += 1
             clasificaciones["clasificados"].append({
                 "shortcode": shortcode,
-                "categoria": categoria,
+                "categorias": categorias,
                 "confianza": confianza,
-                "razon": razon,
+                "descripcion": descripcion,
+                "background_color": background_color,
+                "franjas_negras": franjas_negras,
+                "dia_especial": dia_especial,
                 "source_type": source_type,
+                "razon": razon,
                 "fecha": now,
             })
 
@@ -386,13 +421,21 @@ def main():
 
     # Mostrar distribución de categorías
     if stats["clasificados"] > 0:
-        print("\n   Distribución:")
+        print("\n   Distribución de categorías:")
         cat_counts = {}
         for item in clasificaciones["clasificados"]:
-            cat = item["categoria"]
-            cat_counts[cat] = cat_counts.get(cat, 0) + 1
+            for cat in item.get("categorias", []):
+                cat_counts[cat] = cat_counts.get(cat, 0) + 1
         for cat, count in sorted(cat_counts.items(), key=lambda x: -x[1]):
             print(f"     {cat}: {count}")
+
+        # Mostrar dias especiales si hay
+        dias = [item["dia_especial"] for item in clasificaciones["clasificados"] if item.get("dia_especial")]
+        if dias:
+            print("\n   Memes con día especial:")
+            for dia in set(dias):
+                count = dias.count(dia)
+                print(f"     {dia}: {count}")
 
 
 if __name__ == "__main__":

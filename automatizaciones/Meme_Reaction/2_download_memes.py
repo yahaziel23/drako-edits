@@ -36,6 +36,7 @@ Dependencias: instaloader, requests
 
 import json
 import sys
+import os
 import time
 import random
 import argparse
@@ -54,8 +55,9 @@ except ImportError:
     print("       pip install instaloader")
     sys.exit(1)
 
-# Silenciar los warnings de instaloader (403 retry, etc.)
-logging.getLogger('instaloader').setLevel(logging.ERROR)
+# Silenciar TODOS los loggers de instaloader
+logging.getLogger('instaloader').setLevel(logging.CRITICAL)
+logging.getLogger('instaloader.instaloadercontext').setLevel(logging.CRITICAL)
 
 
 # =============================================================================
@@ -165,6 +167,22 @@ def create_instaloader():
     return L
 
 
+def silent_query(L_context, shortcode):
+    """
+    Ejecuta Post.from_shortcode() suprimiendo la salida de stderr.
+    Instaloader imprime '403 Forbidden [retrying]' directo a stderr,
+    no a través del logger de Python, así que hay que silenciarlo manualmente.
+    """
+    old_stderr = sys.stderr
+    try:
+        sys.stderr = open(os.devnull, 'w')
+        post = instaloader.Post.from_shortcode(L_context, shortcode)
+    finally:
+        sys.stderr.close()
+        sys.stderr = old_stderr
+    return post
+
+
 def download_file(url, output_path):
     """
     Descarga un archivo de una URL directamente con requests.
@@ -230,9 +248,9 @@ def process_shortcode(L, shortcode, stats, min_likes):
     """
     counter = f"[{stats['processed']}/{stats['total']}]"
 
-    # === PASO 1: Obtener info del post ===
+    # === PASO 1: Obtener info del post (stderr suprimido) ===
     try:
-        post = instaloader.Post.from_shortcode(L.context, shortcode)
+        post = silent_query(L.context, shortcode)
     except instaloader.exceptions.QueryReturnedNotFoundException:
         print(f"   {counter} {shortcode} -> [X] No encontrado (borrado?)")
         return "error", {}
