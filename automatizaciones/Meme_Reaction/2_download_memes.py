@@ -5,6 +5,7 @@ Paso 2: Descarga de Memes (instaloader SIN LOGIN)
 
 Lee shortcodes de historial/links_scrapeados.json (campo 'por_descargar').
 Para cada uno:
+  - PRIMERO verifica si ya fue descargado (archivo existe o está en historial)
   - Consulta tipo con Post.from_shortcode() (1 request a IG)
   - GraphImage -> descarga imagen directa con requests
   - GraphVideo -> descarga video con requests, extrae frame con ffmpeg, borra video
@@ -19,6 +20,7 @@ Protecciones anti-ban:
   - Pausa larga (3 min) cada 20 posts procesados
   - Límite máximo de posts por sesión (default: 50)
   - Auto-stop si detecta rate limit / login required
+  - Skip automático de posts ya descargados (no gasta request)
 
 Output: memes_descargados/{shortcode}.jpg
 
@@ -106,6 +108,33 @@ def save_downloads_log(data):
     """Guarda historial de descargas."""
     HISTORIAL_DIR.mkdir(parents=True, exist_ok=True)
     DOWNLOADS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def get_already_processed(downloads_log):
+    """
+    Obtiene todos los shortcodes que ya fueron procesados (descargados, skipped, o error).
+    Esto evita gastar un request a IG si ya lo procesamos antes.
+    """
+    already = set()
+    for item in downloads_log.get("descargados_foto", []):
+        already.add(item["shortcode"])
+    for item in downloads_log.get("descargados_frame", []):
+        already.add(item["shortcode"])
+    for sc in downloads_log.get("skipped_carousels", []):
+        already.add(sc)
+    # NO incluimos errores aquí para que reintente los que fallaron
+    return already
+
+
+def get_already_downloaded_files():
+    """
+    Obtiene shortcodes que ya tienen archivo en memes_descargados/.
+    Doble check por si el historial se perdió pero el archivo existe.
+    """
+    if not MEMES_DIR.exists():
+        return set()
+    image_extensions = {'.jpg', '.jpeg', '.png', '.webp'}
+    return {f.stem for f in MEMES_DIR.iterdir() if f.suffix.lower() in image_extensions}
 
 
 def create_instaloader():
@@ -281,12 +310,33 @@ def main():
 
     print(f"\n   Pendientes de descargar: {len(por_descargar)}")
 
+    # Cargar historial de descargas
+    downloads_log = load_downloads_log()
+
+    # === PROTECCION CONTRA DUPLICADOS ===
+    # Obtener shortcodes que ya fueron procesados o que ya tienen archivo
+    already_in_log = get_already_processed(downloads_log)
+    already_in_files = get_already_downloaded_files()
+    already_done = already_in_log | already_in_files
+
+    # Filtrar duplicados de por_descargar (sin gastar requests)
+    duplicados_encontrados = [sc for sc in por_descargar if sc in already_done]
+    if duplicados_encontrados:
+        print(f"   [SKIP] {len(duplicados_encontrados)} ya descargados (se sacan de la cola)")
+        por_descargar = [sc for sc in por_descargar if sc not in already_done]
+        # Actualizar links_data
+        links_data["por_descargar"] = por_descargar
+        save_links(links_data)
+
+    if not por_descargar:
+        print("\n   [!] Todos los pendientes ya fueron descargados previamente.")
+        return
+
+    print(f"   Pendientes reales (sin duplicados): {len(por_descargar)}")
+
     # Limitar a max_sesion
     batch = por_descargar[:max_sesion]
     print(f"   Procesando en esta sesión: {len(batch)}")
-
-    # Cargar historial de descargas
-    downloads_log = load_downloads_log()
 
     # Crear instaloader (solo para queries)
     L = create_instaloader()
@@ -364,6 +414,8 @@ def main():
     print(f"   Errores: {stats['errores']}")
     print(f"   Total imágenes guardadas: {stats['fotos'] + stats['frames']}")
     print(f"   Pendientes restantes: {len(links_data['por_descargar'])}")
+    if duplicados_encontrados:
+        print(f"   Duplicados saltados (sin request): {len(duplicados_encontrados)}")
     if stopped_early:
         print("   [!] Se detuvo por rate limit. Corre de nuevo más tarde.")
     print(f"   Carpeta: {MEMES_DIR}")
