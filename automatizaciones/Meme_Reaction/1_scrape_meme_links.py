@@ -4,13 +4,14 @@
 Paso 1: Scraping de Links con Selenium (Brave)
 
 Abre Brave visible → navega a perfiles de IG → pausa para login manual
-→ scrollea → extrae links de posts tipo FOTO SIMPLE → guarda shortcodes nuevos.
+→ scrollea → captura TODOS los shortcodes del grid → guarda en historial.
 
-Filtro:
-- Solo fotos simples (sin overlay icons)
-- Videos/Reels tienen SVG de play → skip
-- Carousels tienen SVG de múltiples páginas → skip
-- Regla: si el link del grid tiene CUALQUIER SVG dentro → no es foto simple → skip
+IMPORTANTE:
+- Instagram usa /reel/ para CASI TODO en el grid (incluso fotos)
+- Instagram virtualiza el DOM (links desaparecen al scrollear)
+- Por eso capturamos shortcodes DURANTE el scroll, no solo al final
+- NO filtramos fotos vs videos aquí (imposible con el DOM actual)
+- El Paso 2 (instaloader) determina si es foto o video y descarga solo fotos
 
 Output: historial/links_scrapeados.json
 
@@ -53,7 +54,7 @@ PERFILES_TARGET = [
 ]
 
 # --- SCRAPING ---
-SCROLL_COUNT = 5          # Cuántas veces scrollear
+SCROLL_COUNT = 8          # Cuántas veces scrollear (más = más posts)
 SCROLL_DELAY = 3.0        # Segundos base entre scrolls
 DELAY_ENTRE_PERFILES = 5  # Segundos entre perfiles
 
@@ -148,156 +149,79 @@ def wait_for_login(driver):
     print("")
 
 
-def scroll_page(driver, times=SCROLL_COUNT):
-    """Scrollea la página para cargar más posts."""
-    prev_count = 0
+def extract_shortcodes_from_dom(driver):
+    """
+    Extrae TODOS los shortcodes visibles en el DOM en este momento.
+    Busca tanto /p/XXXXX como /reel/XXXXX (IG usa ambos indistintamente).
+    """
+    shortcodes = driver.execute_script("""
+        const codes = new Set();
+        const allLinks = document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]');
+        allLinks.forEach(link => {
+            const href = link.getAttribute('href') || '';
+            const match = href.match(/\/(p|reel)\/([A-Za-z0-9_-]+)/);
+            if (match) {
+                codes.add(match[2]);
+            }
+        });
+        return Array.from(codes);
+    """)
+    return set(shortcodes)
+
+
+def scroll_and_collect(driver, times=SCROLL_COUNT):
+    """
+    Scrollea la página y captura shortcodes EN CADA SCROLL.
+    
+    Instagram virtualiza el DOM (los links desaparecen al salir del viewport),
+    así que capturamos shortcodes después de cada scroll y los acumulamos.
+    """
+    all_shortcodes = set()
+
+    # Capturar lo que hay antes de scrollear
+    initial = extract_shortcodes_from_dom(driver)
+    all_shortcodes.update(initial)
+    print(f"   Antes de scroll: {len(initial)} shortcodes")
+
     for i in range(times):
+        # Scroll hasta abajo
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         delay = SCROLL_DELAY + random.uniform(1.0, 2.5)
-        print(f"      Scroll {i+1}/{times} (esperando {delay:.1f}s)...", end="")
         time.sleep(delay)
 
-        # Simula humano: sube un poco y vuelve a bajar
-        driver.execute_script("window.scrollBy(0, -200);")
-        time.sleep(0.8)
+        # Simula humano: sube un poco y vuelve
+        driver.execute_script("window.scrollBy(0, -300);")
+        time.sleep(0.7)
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         time.sleep(1.5)
 
-        # Contar links para ver progreso
-        current_count = driver.execute_script(
-            "return document.querySelectorAll('a[href*=\"/p/\"]').length;"
-        )
-        print(f" ({current_count} links en DOM)")
+        # Capturar shortcodes del DOM actual
+        current = extract_shortcodes_from_dom(driver)
+        new_this_scroll = current - all_shortcodes
+        all_shortcodes.update(current)
 
-        if current_count == prev_count and i > 1:
-            print("      [!] No cargaron más links.")
-        prev_count = current_count
+        print(f"      Scroll {i+1}/{times}: +{len(new_this_scroll)} nuevos (total acumulado: {len(all_shortcodes)})")
 
+        # Si no hay nuevos en 2 scrolls seguidos, puede que sea el fin
+        if len(new_this_scroll) == 0 and i > 2:
+            print("      [!] Sin nuevos. Probablemente se acabó el contenido.")
 
-def extract_and_filter_posts(driver):
-    """
-    Extrae posts del grid y los clasifica usando JavaScript.
-    
-    Regla de filtrado:
-    - Fotos simples: el <a> del grid NO tiene ningún <svg> dentro
-    - Videos/Reels: tienen SVG con icono de play (triángulo)
-    - Carousels: tienen SVG con icono de múltiples páginas
-    - Regla simplificada: tiene SVG = skip, no tiene SVG = foto simple
-    
-    Returns:
-        tuple: (fotos_simples, con_svg_overlay)
-            Cada uno es una lista de shortcodes
-    """
-    result = driver.execute_script("""
-        const fotos = [];
-        const otros = [];
-        
-        // Obtener todos los links /p/ de la página
-        const allLinks = document.querySelectorAll('a[href*="/p/"]');
-        
-        allLinks.forEach(link => {
-            const href = link.getAttribute('href') || '';
-            const match = href.match(/\/p\/([A-Za-z0-9_-]+)/);
-            if (!match) return;
-            
-            const shortcode = match[1];
-            
-            // Buscar SVGs dentro del link
-            // Fotos simples: 0 SVGs overlay
-            // Videos: tienen SVG (play icon)
-            // Carousels: tienen SVG (multi-page icon)
-            const svgs = link.querySelectorAll('svg');
-            
-            if (svgs.length === 0) {
-                fotos.push(shortcode);
-            } else {
-                otros.push(shortcode);
-            }
-        });
-        
-        return {fotos: fotos, otros: otros};
-    """)
-
-    fotos = result.get("fotos", [])
-    otros = result.get("otros", [])
-    return fotos, otros
-
-
-def debug_page_state(driver):
-    """
-    Imprime información de debug sobre el estado de la página.
-    Se activa cuando se encuentran muy pocos posts.
-    """
-    print("")
-    print("   " + "~" * 50)
-    print("   DEBUG: Analizando DOM de la página")
-    print("   " + "~" * 50)
-
-    # Total de <a> en la página
-    total_a = driver.execute_script("return document.querySelectorAll('a').length;")
-    print(f"   Total de <a> en la página: {total_a}")
-
-    # Links con /p/
-    p_links = driver.execute_script("""
-        const links = document.querySelectorAll('a[href*="/p/"]');
-        return Array.from(links).map(a => {
-            const svgCount = a.querySelectorAll('svg').length;
-            return {href: a.href, svgs: svgCount, text: a.textContent.slice(0, 30)};
-        });
-    """)
-    print(f"   Links con /p/: {len(p_links)}")
-    for item in p_links[:15]:
-        print(f"     {item['href']} (SVGs: {item['svgs']})")
-
-    # Links con /reel/
-    reel_links = driver.execute_script("""
-        const links = document.querySelectorAll('a[href*="/reel/"]');
-        return Array.from(links).map(a => a.href);
-    """)
-    if reel_links:
-        print(f"   Links con /reel/: {len(reel_links)}")
-        for h in reel_links[:5]:
-            print(f"     {h}")
-
-    # Buscar el grid principal (article)
-    articles = driver.execute_script("return document.querySelectorAll('article').length;")
-    print(f"   <article> elements: {articles}")
-
-    # Buscar por la estructura del grid de IG
-    grid_items = driver.execute_script("""
-        // Intentar encontrar el contenedor del grid
-        // Instagram suele usar un div con role='tabpanel' o similar
-        const mainContent = document.querySelector('main') || document.body;
-        const allLinks = mainContent.querySelectorAll('a');
-        const igLinks = [];
-        allLinks.forEach(a => {
-            const href = a.getAttribute('href') || '';
-            if (href.startsWith('/p/') || href.startsWith('/reel/')) {
-                igLinks.push(href);
-            }
-        });
-        return igLinks;
-    """)
-    print(f"   Links relativos /p/ o /reel/ en <main>: {len(grid_items)}")
-    for h in grid_items[:15]:
-        print(f"     {h}")
-
-    print("   " + "~" * 50)
-    print("")
+    return all_shortcodes
 
 
 def scrape_profile(driver, username, historial):
     """
-    Scrapes un perfil y retorna shortcodes nuevos de fotos simples.
+    Scrapes un perfil y retorna shortcodes nuevos.
+    NO filtra fotos vs videos (eso lo hace el Paso 2 con instaloader).
     """
     url = f"https://www.instagram.com/{username}/"
     print(f"\n   Navegando a: {url}")
     driver.get(url)
 
-    # Esperar que cargue - buscar links /p/ O cualquier article
+    # Esperar que cargue algo
     try:
         WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, 'a[href*="/p/"], article'))
+            EC.presence_of_element_located((By.CSS_SELECTOR, 'a[href*="/p/"], a[href*="/reel/"]'))
         )
         print("   [OK] Página cargada.")
     except Exception:
@@ -308,39 +232,16 @@ def scrape_profile(driver, username, historial):
     # Espera extra para render completo
     time.sleep(4)
 
-    # Contar posts iniciales
-    initial_count = driver.execute_script(
-        "return document.querySelectorAll('a[href*=\"/p/\"]').length;"
-    )
-    print(f"   Posts /p/ visibles inicialmente: {initial_count}")
+    # Scrollear y capturar
+    print(f"   Scrolleando y capturando ({SCROLL_COUNT} scrolls)...")
+    all_shortcodes = scroll_and_collect(driver)
 
-    # Si hay 0 o muy pocos, activar debug antes de scrollear
-    if initial_count <= 3:
-        print("   [!] Muy pocos posts detectados. Activando debug...")
-        debug_page_state(driver)
-
-    # Scrollear
-    print(f"   Scrolleando ({SCROLL_COUNT} veces)...")
-    scroll_page(driver)
-
-    # Espera final
-    time.sleep(2)
-
-    # Extraer y filtrar
-    fotos_simples, otros = extract_and_filter_posts(driver)
-
-    print(f"   Resultado:")
-    print(f"     Fotos simples (sin SVG overlay): {len(fotos_simples)}")
-    print(f"     Videos/Carousels (con SVG overlay): {len(otros)}")
-
-    # Si hay pocos resultados totales, debug
-    if len(fotos_simples) + len(otros) <= 3:
-        debug_page_state(driver)
+    print(f"\n   Total shortcodes capturados: {len(all_shortcodes)}")
 
     # Filtrar ya scrapeados
     ya_scrapeados = set(historial.get("scrapeados", []))
-    nuevos = [sc for sc in fotos_simples if sc not in ya_scrapeados]
-    print(f"     Nuevos (no scrapeados antes): {len(nuevos)}")
+    nuevos = [sc for sc in all_shortcodes if sc not in ya_scrapeados]
+    print(f"   Nuevos (no scrapeados antes): {len(nuevos)}")
 
     return nuevos
 
@@ -361,7 +262,8 @@ def main():
     print(f"   Perfiles target: {PERFILES_TARGET}")
     print(f"   Scrolls por perfil: {SCROLL_COUNT}")
     print(f"   Historial: {LINKS_FILE}")
-    print(f"   Filtro: SOLO fotos simples (sin SVG = sin icono video/carousel)")
+    print("   Nota: Captura TODOS los shortcodes (fotos+videos).")
+    print("         El Paso 2 filtrará solo fotos con instaloader.")
 
     # Verificar Brave
     if not Path(BRAVE_PATH).exists():
@@ -410,14 +312,14 @@ def main():
         print(SEPARATOR_EQ)
         print("   RESUMEN")
         print(SEPARATOR_EQ)
-        print(f"   Nuevos links encontrados: {len(todos_nuevos)}")
+        print(f"   Nuevos shortcodes encontrados: {len(todos_nuevos)}")
         print(f"   Total en historial: {len(historial['scrapeados'])}")
         print(f"   Pendientes de descargar: {len(historial['por_descargar'])}")
         print(f"   Guardado en: {LINKS_FILE}")
         print(SEPARATOR_EQ)
 
         if todos_nuevos:
-            print("\n   Links nuevos:")
+            print("\n   Primeros 10:")
             for sc in todos_nuevos[:10]:
                 print(f"     - https://www.instagram.com/p/{sc}/")
             if len(todos_nuevos) > 10:
