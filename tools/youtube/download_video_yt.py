@@ -6,6 +6,7 @@ Drako Edits - Descargador de Video de YouTube
 Descarga videos de cualquier URL de YouTube (shorts, normales, etc.)
 Te pregunta si quieres con o sin audio:
   - Con audio:    se guarda como "{nombre} (audio).mp4"
+                  + AUTOMATICAMENTE guarda audio aparte como "{nombre} (only audio).mp3"
   - Sin audio:    se guarda como "{nombre} (sinaudio).mp4"
                   + te pregunta si quieres descargar el audio aparte (MP3)
 
@@ -163,8 +164,8 @@ def interactive_download():
 
     # 2. Con o sin audio?
     print("\n--- PASO 2: Audio ---")
-    print("   1. Con audio    -> se guarda como '{nombre} (audio).mp4'")
-    print("   2. Sin audio    -> se guarda como '{nombre} (sinaudio).mp4'")
+    print("   1. Con audio    -> '{nombre} (audio).mp4' + '{nombre} (only audio).mp3'")
+    print("   2. Sin audio    -> '{nombre} (sinaudio).mp4'")
     mode_choice = input("\n   Con o sin audio? (1/2): ").strip()
     include_audio = mode_choice != "2"
 
@@ -186,8 +187,15 @@ def interactive_download():
     print(f"\n--- PASO 4: Descargando ---")
     video_result = download_video(url, video_filename, include_audio)
 
-    # 5. Si pidio sin audio, preguntar si quiere descargar el audio aparte
-    if not include_audio and video_result:
+    # 5. Audio por separado
+    if include_audio and video_result:
+        # SIEMPRE guarda audio aparte cuando se descarga con audio
+        audio_filename = f"{name} (only audio).mp3"
+        print(f"\n--- PASO 5: Guardando audio por separado ---")
+        download_audio(url, audio_filename)
+
+    elif not include_audio and video_result:
+        # Si pidio sin audio, preguntar si quiere descargar el audio aparte
         print("\n--- PASO 5: Audio aparte ---")
         also_audio = input("   Descargar el audio por separado? (s/n): ").strip().lower()
 
@@ -197,11 +205,9 @@ def interactive_download():
             audio_name = input("   Nombre audio: ").strip()
             if audio_name:
                 audio_filename = f"{audio_name}.mp3"
-                download_audio(url, audio_filename)
             else:
-                # Usar mismo nombre que el video
-                audio_filename = f"{name}.mp3"
-                download_audio(url, audio_filename)
+                audio_filename = f"{name} (only audio).mp3"
+            download_audio(url, audio_filename)
 
     # Resumen
     print(f"\n{'='*60}")
@@ -209,6 +215,8 @@ def interactive_download():
     print(f"{'='*60}")
     if video_result:
         print(f"   Video: {video_filename}")
+        if include_audio:
+            print(f"   Audio: {name} (only audio).mp3")
     print(f"   Carpeta videos: {VIDEOS_DIR}")
     print(f"   Carpeta audios: {AUDIOS_DIR}")
     print(f"{'='*60}")
@@ -245,10 +253,16 @@ if __name__ == "__main__":
         else:
             video_filename = f"{args.name} (sinaudio).mp4"
 
-        download_video(args.url, video_filename, include_audio)
+        video_result = download_video(args.url, video_filename, include_audio)
 
+        # Si descargo con audio, SIEMPRE guardar audio aparte
+        if include_audio and video_result:
+            audio_filename = f"{args.name} (only audio).mp3"
+            download_audio(args.url, audio_filename)
+
+        # Si descargo sin audio y pidio also-audio
         if not include_audio and args.also_audio:
             audio_name = args.audio_name or args.name
-            download_audio(args.url, f"{audio_name}.mp3")
+            download_audio(args.url, f"{audio_name} (only audio).mp3")
     else:
         interactive_download()
