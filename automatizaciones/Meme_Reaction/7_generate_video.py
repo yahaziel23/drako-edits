@@ -16,6 +16,12 @@ NO depende de la clasificacion IA (detail:low es impreciso para bordes).
 
 Tambien genera el JSON config (paso 8) automaticamente.
 
+Layout:
+  - Meme: arriba, maximo 70% de pantalla, con borde/padding de 3% en todos los lados
+  - Clip: abajo, maximo 40% de pantalla, sin borde
+  - El meme SIEMPRE se ve completo (fit, nunca crop)
+  - Si meme es chico, se centra en su zona con fondo de relleno
+
 Modo semi-interactivo:
   - Muestra cada match antes de generar
   - Puedes confirmar, saltar, o salir
@@ -28,6 +34,7 @@ Uso:
     python 7_generate_video.py --redo ABC123          # Re-generar uno
     python 7_generate_video.py --redo ABC123 DEF456   # Re-generar varios
     python 7_generate_video.py --redo-all             # Re-generar todos
+    python 7_generate_video.py --no-crop-meme         # No cropear franjas del meme
 
 Dependencias: moviepy, Pillow, numpy
 """
@@ -76,9 +83,19 @@ VIDEO_WIDTH = 1080
 VIDEO_HEIGHT = 1920
 FPS = 30
 
-# Layout: meme siempre ocupa mas que el clip
-MEME_MIN_RATIO = 0.65
-MEME_MAX_RATIO = 0.75
+# =============================================================================
+# LAYOUT PROPORTIONS
+# =============================================================================
+# Clip: siempre abajo, maximo 40% de pantalla, sin borde
+# Meme: siempre arriba, maximo 70% de pantalla, con borde de 3%
+# Si meme es chico (ej. cabe en 30%), clip sigue en 40% y meme se centra
+# en el 60% restante con padding de fondo.
+# Si meme necesita mas (>60%), expande hasta 70% y clip baja a 30%.
+
+CLIP_MAX_RATIO = 0.40       # Clip toma maximo 40% de la pantalla
+CLIP_MIN_RATIO = 0.30       # Clip minimo 30% (cuando meme necesita 70%)
+MEME_MAX_RATIO = 0.70       # Zona meme maximo 70% de la pantalla
+MEME_BORDER_RATIO = 0.03    # 3% de padding en cada lado del meme
 
 # Background color (default blanco, puede cambiar por clasificacion)
 BG_COLOR_MAP = {
@@ -191,7 +208,6 @@ def remove_from_generados(generados, shortcodes):
     removed = 0
     shortcodes_set = set(shortcodes)
 
-    # Remover de generados
     original_gen = len(generados.get("generados", []))
     generados["generados"] = [
         item for item in generados.get("generados", [])
@@ -199,7 +215,6 @@ def remove_from_generados(generados, shortcodes):
     ]
     removed += original_gen - len(generados["generados"])
 
-    # Remover de errores
     original_err = len(generados.get("errores", []))
     generados["errores"] = [
         item for item in generados.get("errores", [])
@@ -224,10 +239,8 @@ def detect_black_bars_image(image_path):
     arr = np.array(img)
     height = arr.shape[0]
 
-    # Calcular mean de cada fila
-    row_means = np.mean(arr, axis=(1, 2))  # mean de R,G,B por fila
+    row_means = np.mean(arr, axis=(1, 2))
 
-    # Detectar barras arriba
     top_crop = 0
     for row in range(height):
         if row_means[row] < BLACK_BAR_THRESHOLD:
@@ -235,7 +248,6 @@ def detect_black_bars_image(image_path):
         else:
             break
 
-    # Detectar barras abajo
     bottom_crop = 0
     for row in range(height - 1, -1, -1):
         if row_means[row] < BLACK_BAR_THRESHOLD:
@@ -243,13 +255,11 @@ def detect_black_bars_image(image_path):
         else:
             break
 
-    # Minimo de filas para no ser ruido
     if top_crop < BLACK_BAR_MIN_ROWS:
         top_crop = 0
     if bottom_crop < BLACK_BAR_MIN_ROWS:
         bottom_crop = 0
 
-    # Safety: nunca cropear mas del MAX_CROP_RATIO
     if top_crop + bottom_crop > int(height * MAX_CROP_RATIO):
         return 0, 0
 
@@ -320,7 +330,7 @@ def detect_black_bars_multiframe(video_clip):
 def crop_meme_franjas(meme_path):
     """
     Detecta y cropea franjas negras del meme PROGRAMATICAMENTE.
-    Escanea los pixels reales de la imagen — NO depende de la IA.
+    Escanea los pixels reales de la imagen - NO depende de la IA.
     Retorna path a imagen cropeada (temp) o la original si no hay crop.
     """
     top_crop, bottom_crop = detect_black_bars_image(meme_path)
@@ -339,7 +349,6 @@ def crop_meme_franjas(meme_path):
 
     cropped = img.crop((0, new_top, w, new_bottom))
 
-    # Guardar como temp
     temp_path = meme_path.parent / f"_temp_crop_{meme_path.name}"
     cropped.save(temp_path, quality=95)
 
@@ -352,7 +361,7 @@ def crop_meme_franjas(meme_path):
 
 
 # =============================================================================
-# FUNCIONES - VIDEO GENERATION
+# FUNCIONES - LAYOUT & VIDEO GENERATION
 # =============================================================================
 
 def find_font():
@@ -371,7 +380,10 @@ def find_font():
 
 
 def fit_image_to_area(img, area_width, area_height, bg_color=(255, 255, 255)):
-    """Escala imagen para que quepa completa (fit, no crop). Rellena con bg_color."""
+    """
+    Escala imagen para que quepa completa (fit, no crop).
+    Rellena con bg_color. Centra la imagen en el area.
+    """
     img_ratio = img.width / img.height
     area_ratio = area_width / area_height
 
@@ -392,34 +404,50 @@ def fit_image_to_area(img, area_width, area_height, bg_color=(255, 255, 255)):
 
 
 def calculate_layout(meme_path, clip_size):
-    """Calcula split dinamico meme/clip."""
+    """
+    Calcula split dinamico meme/clip.
+
+    Reglas:
+    - Clip: maximo 40%, minimo 30%, SIN borde, siempre abajo
+    - Meme: maximo 70%, CON borde de 3% en cada lado, siempre arriba
+    - Default: clip 40%, meme_zona 60%
+    - Si el meme necesita mas de 60% (por su aspect ratio + bordes): 
+      expandir meme hasta 70%, clip baja a 30%
+    - El meme SIEMPRE se ve completo (fit dentro de zona - bordes)
+    - Si el meme es chico, se centra en su zona con fondo de relleno
+
+    Retorna (meme_area_h, clip_area_h)
+    """
+    border_y = int(MEME_BORDER_RATIO * VIDEO_HEIGHT)  # ~58px
+    border_x = int(MEME_BORDER_RATIO * VIDEO_WIDTH)   # ~32px
+
+    # Calcular alto natural del meme al ancho disponible (dentro de bordes)
     meme_img = Image.open(meme_path)
     meme_ratio = meme_img.width / meme_img.height
-    meme_natural_h = int(VIDEO_WIDTH / meme_ratio)
+    drawable_w = VIDEO_WIDTH - 2 * border_x
+    meme_natural_h = int(drawable_w / meme_ratio)  # alto necesario para mostrar meme completo
+    meme_needed = meme_natural_h + 2 * border_y    # total con bordes arriba/abajo
 
-    clip_w, clip_h = clip_size
-    clip_ratio = clip_w / clip_h
-    clip_natural_h = int(VIDEO_WIDTH / clip_ratio)
+    # Default split: clip 40%, meme 60%
+    default_clip_h = int(CLIP_MAX_RATIO * VIDEO_HEIGHT)   # 768px
+    default_meme_h = VIDEO_HEIGHT - default_clip_h        # 1152px
 
-    total_needed = meme_natural_h + clip_natural_h
-
-    if total_needed <= VIDEO_HEIGHT:
-        meme_area_h = meme_natural_h + (VIDEO_HEIGHT - total_needed) // 2
-        clip_area_h = VIDEO_HEIGHT - meme_area_h
+    if meme_needed <= default_meme_h:
+        # El meme cabe comodo en el 60% default
+        # Clip toma 40%, meme zona = 60% (meme se centra dentro)
+        meme_area_h = default_meme_h
+        clip_area_h = default_clip_h
     else:
-        scale = VIDEO_HEIGHT / total_needed
-        meme_area_h = int(meme_natural_h * scale)
+        # El meme necesita mas espacio - expandir zona meme
+        max_meme_h = int(MEME_MAX_RATIO * VIDEO_HEIGHT)   # 1344px
+        meme_area_h = min(meme_needed, max_meme_h)
         clip_area_h = VIDEO_HEIGHT - meme_area_h
 
-    min_meme_h = int(VIDEO_HEIGHT * MEME_MIN_RATIO)
-    max_meme_h = int(VIDEO_HEIGHT * MEME_MAX_RATIO)
-
-    if meme_area_h < min_meme_h:
-        meme_area_h = min_meme_h
-        clip_area_h = VIDEO_HEIGHT - meme_area_h
-    elif meme_area_h > max_meme_h:
-        meme_area_h = max_meme_h
-        clip_area_h = VIDEO_HEIGHT - meme_area_h
+        # Asegurar que clip no baje de 30%
+        min_clip_h = int(CLIP_MIN_RATIO * VIDEO_HEIGHT)    # 576px
+        if clip_area_h < min_clip_h:
+            clip_area_h = min_clip_h
+            meme_area_h = VIDEO_HEIGHT - clip_area_h
 
     return meme_area_h, clip_area_h
 
@@ -469,7 +497,11 @@ def generate_meme_reaction(meme_path, clip_path, caption_text, caption_size_key,
                            output_name, bg_color=(255, 255, 255)):
     """
     Genera el video de meme reaction.
-    Audio: siempre del clip.
+
+    Layout:
+    - Meme arriba: zona con borde de 3%, imagen centrada (fit completo)
+    - Clip abajo: sin borde, fit al ancho
+    - Audio: siempre del clip
     """
     caption_size = CAPTION_SIZES.get(caption_size_key, CAPTION_SIZES["M"]) if caption_size_key else None
 
@@ -481,7 +513,7 @@ def generate_meme_reaction(meme_path, clip_path, caption_text, caption_size_key,
     print(f"   Caption: {caption_text or '(sin)'} [{caption_size_key or '-'}]")
     print(f"   {'='*50}")
 
-    # Cargar clip
+    # --- Cargar clip ---
     print("\n   Cargando clip...")
     video_clip = VideoFileClip(str(clip_path))
 
@@ -500,23 +532,36 @@ def generate_meme_reaction(meme_path, clip_path, caption_text, caption_size_key,
 
     clip_size = video_clip.size
 
-    # Layout dinamico
+    # --- Layout dinamico ---
     meme_area_h, clip_area_h = calculate_layout(meme_path, clip_size)
-    print(f"   Layout: meme={meme_area_h}px ({meme_area_h/VIDEO_HEIGHT*100:.0f}%) | clip={clip_area_h}px")
+    print(f"   Layout: meme_zona={meme_area_h}px ({meme_area_h/VIDEO_HEIGHT*100:.0f}%) | clip={clip_area_h}px ({clip_area_h/VIDEO_HEIGHT*100:.0f}%)")
 
-    # Preparar meme
+    # --- Preparar meme (con borde, centrado, fit completo) ---
     print("   Procesando meme...")
-    meme_img = Image.open(meme_path).convert("RGB")
-    meme_fitted = fit_image_to_area(meme_img, VIDEO_WIDTH, meme_area_h, bg_color)
-    meme_array = np.array(meme_fitted)
+    border_y = int(MEME_BORDER_RATIO * VIDEO_HEIGHT)  # padding vertical (~58px)
+    border_x = int(MEME_BORDER_RATIO * VIDEO_WIDTH)   # padding horizontal (~32px)
+    drawable_w = VIDEO_WIDTH - 2 * border_x
+    drawable_h = meme_area_h - 2 * border_y
 
-    # Duracion = duracion del clip
+    meme_img = Image.open(meme_path).convert("RGB")
+
+    # Fit meme dentro del area dibujable (nunca crop, siempre completo)
+    meme_fitted = fit_image_to_area(meme_img, drawable_w, drawable_h, bg_color)
+
+    # Crear canvas completo de la zona meme (bg + meme centrado con bordes)
+    meme_canvas = Image.new("RGB", (VIDEO_WIDTH, meme_area_h), bg_color)
+    meme_canvas.paste(meme_fitted, (border_x, border_y))
+    meme_array = np.array(meme_canvas)
+
+    print(f"   [meme] Imagen: {meme_img.width}x{meme_img.height} -> fit en {drawable_w}x{drawable_h} (borde {border_x}px/{border_y}px)")
+
+    # --- Duracion = duracion del clip ---
     duration = video_clip.duration
     print(f"   Duracion: {duration:.2f}s")
 
     video_clip = video_clip.subclipped(0, min(duration, video_clip.duration - 0.01))
 
-    # Procesar frames del clip
+    # --- Procesar frames del clip (fit al area, sin borde) ---
     def process_frame(frame):
         img = Image.fromarray(frame)
         fitted = fit_image_to_area(img, VIDEO_WIDTH, clip_area_h, bg_color)
@@ -525,18 +570,19 @@ def generate_meme_reaction(meme_path, clip_path, caption_text, caption_size_key,
     print("   Procesando frames...")
     processed_clip = video_clip.image_transform(process_frame)
 
-    # Composicion
+    # --- Composicion ---
     meme_clip = ImageClip(meme_array).with_duration(duration)
     meme_clip = meme_clip.with_position((0, 0))
     processed_clip = processed_clip.with_position((0, meme_area_h))
 
     layers = [meme_clip, processed_clip]
 
-    # Caption
+    # Caption (se posiciona entre meme y clip)
     if caption_text and caption_size:
         font_path = find_font()
         caption_img = render_caption(caption_text, font_path, caption_size)
         x_pos = max(0, (VIDEO_WIDTH - caption_img.shape[1]) // 2)
+        # Caption en la linea divisoria meme/clip
         y_pos = meme_area_h - caption_img.shape[0] // 2
         cap_clip = (ImageClip(caption_img)
                     .with_position((x_pos, y_pos))
@@ -631,6 +677,8 @@ def main():
                         help="Re-generar video(s) especifico(s) por shortcode")
     parser.add_argument("--redo-all", action="store_true",
                         help="Re-generar TODOS los videos (limpia historial completo)")
+    parser.add_argument("--no-crop-meme", action="store_true",
+                        help="No cropear franjas negras del meme (usar imagen original)")
     args = parser.parse_args()
 
     print("")
@@ -643,6 +691,8 @@ def main():
         print("   Modo: AUTOMATICO (sin confirmacion)")
     else:
         print("   Modo: INTERACTIVO (confirma cada uno)")
+    if args.no_crop_meme:
+        print("   Crop meme: DESHABILITADO (imagen original)")
     print(SEPARATOR_EQ)
 
     # Cargar datos
@@ -759,8 +809,12 @@ def main():
                 print("\n   [SALIR] Progreso guardado.")
                 break
 
-        # Crop franjas negras del meme PROGRAMATICAMENTE (no depende de IA)
-        actual_meme_path = crop_meme_franjas(meme_path)
+        # Crop franjas negras del meme (a menos que --no-crop-meme)
+        if not args.no_crop_meme:
+            actual_meme_path = crop_meme_franjas(meme_path)
+        else:
+            actual_meme_path = meme_path
+            print("   [meme-crop] Skipped (--no-crop-meme)")
 
         # Determinar background color
         bg_key = clasificacion.get("background_color", "blanco") if clasificacion else "blanco"
