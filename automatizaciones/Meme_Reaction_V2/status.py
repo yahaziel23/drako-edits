@@ -36,8 +36,11 @@ def get_status_counts(db):
 
 
 def get_source_type_counts(db):
+    """Solo cuenta memes en pipeline temprano (no rechazados/finalizados)."""
     rows = db.execute(
-        "SELECT source_type, COUNT(*) as cnt FROM memes GROUP BY source_type"
+        "SELECT source_type, COUNT(*) as cnt FROM memes "
+        "WHERE status IN ('por_descargar','descargado','pendiente_review','listo_clasificar') "
+        "GROUP BY source_type"
     ).fetchall()
     return {row['source_type']: row['cnt'] for row in rows}
 
@@ -178,8 +181,8 @@ def display_status(detailed=False):
     desc_frame = 0
     for st in ['listo_clasificar', 'pendiente_review', 'pendiente_match', 'match_review', 'buscar_clip', 'por_generar', 'generado']:
         pass  # source_types count all, not just descargados
-    print(f"     Descargados (foto):    {source_types.get('foto', 0)}")
-    print(f"     Descargados (frame):   {source_types.get('frame', 0)}")
+    print(f"     En cola (foto):        {source_types.get('foto', 0)}")
+    print(f"     En cola (frame):       {source_types.get('frame', 0)}")
     print(f"")
     print(f"   Review:")
     print(f"     Pendientes review:     {counts.get('pendiente_review', 0)}")
