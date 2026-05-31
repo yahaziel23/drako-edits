@@ -246,8 +246,15 @@ def generate_html(memes):
     html_parts.append('document.getElementById("sok").textContent="OK: "+ok;')
     html_parts.append('document.getElementById("sre").textContent="Reclasificar: "+re;')
     html_parts.append('document.getElementById("srj").textContent="Rechazar: "+rj;}')
-    html_parts.append('function pickIdea(sc,idx){picks[sc]=idx;var card=document.getElementById('c-'+sc);card.querySelectorAll('.idea-item').forEach(function(li){li.classList.remove('picked');});card.querySelector('[data-idx="'+idx+'"]').classList.add('picked');}
-function saveResults(){')
+    pick_js = (
+        "function pickIdea(sc,idx){"
+        "picks[sc]=idx;"
+        'var card=document.getElementById("c-"+sc);'
+        'card.querySelectorAll(".idea-item").forEach(function(li){li.classList.remove("picked")});'
+        'card.querySelector("[data-idx=\""+idx+"\"]").classList.add("picked");}'
+    )
+    html_parts.append(pick_js)
+    html_parts.append('function saveResults(){')
     html_parts.append('document.querySelectorAll(".notes").forEach(function(ta){if(ta.value.trim())notes[ta.dataset.sc]=ta.value.trim();});')
     html_parts.append('var t=Object.keys(D).length;')
     html_parts.append('var data={timestamp:new Date().toISOString(),total_decisions:t,decisions:D,feedback:notes,idea_picks:picks};')
