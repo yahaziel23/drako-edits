@@ -243,6 +243,8 @@ def display_status(detailed=False):
     # Priority: downstream actions first (unblock the pipeline)
     if counts.get('match_review', 0) > 0:
         suggestions.append(f"     python catalogo_matches.py  ({counts['match_review']} matches por revisar)")
+    if counts.get('generado', 0) > 0:
+        suggestions.append(f"     python preview_videos.py  ({counts['generado']} por revisar)")
     if counts.get('por_generar', 0) > 0:
         suggestions.append(f"     python 7_generate_video.py  ({counts['por_generar']} listos)")
     if counts.get('pendiente_match', 0) > 0:
