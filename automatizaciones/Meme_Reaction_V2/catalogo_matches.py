@@ -58,6 +58,9 @@ def get_matches_for_review():
         FROM memes m
         JOIN clasificaciones c ON m.shortcode = c.shortcode
         WHERE m.status IN ('match_review', 'buscar_clip', 'por_generar')
+        AND m.shortcode NOT IN (
+            SELECT shortcode FROM matches WHERE match_type = 'confirmed'
+        )
         ORDER BY 
             CASE m.status 
                 WHEN 'por_generar' THEN 1
@@ -655,6 +658,60 @@ def export_decisions():
     log.info(f"Total decisiones: {len(rows)}")
 
 
+def show_confirmed():
+    """Muestra resumen de matches confirmados (listos para generar)."""
+    log = get_logger()
+    db = get_db()
+    
+    rows = db.execute("""
+        SELECT m.shortcode, m.status, mt.clip_id, mt.accuracy, mt.caption,
+               c.descripcion as meme_desc, c.categorias,
+               cl.descripcion_corta as clip_desc, cl.mood, cl.filename
+        FROM matches mt
+        JOIN memes m ON mt.shortcode = m.shortcode
+        JOIN clasificaciones c ON mt.shortcode = c.shortcode
+        LEFT JOIN clips cl ON mt.clip_id = cl.id
+        WHERE mt.match_type = 'confirmed'
+        ORDER BY mt.matched_at DESC
+    """).fetchall()
+    
+    if not rows:
+        log.info("No hay matches confirmados aun.")
+        log.info("Usa: python catalogo_matches.py  (para decidir)")
+        return
+    
+    log.info(f"")
+    log.info(f"{'='*60}")
+    log.info(f"   MATCHES CONFIRMADOS - COLA DE GENERACION")
+    log.info(f"{'='*60}")
+    log.info(f"   Total: {len(rows)} videos por generar")
+    log.info(f"{'='*60}")
+    log.info(f"")
+    
+    for i, row in enumerate(rows, 1):
+        cats = []
+        try:
+            cats = json.loads(row['categorias']) if row['categorias'] else []
+        except Exception:
+            pass
+        
+        caption_str = f'"{row["caption"]}"' if row['caption'] else '(sin caption)'
+        
+        log.info(f"  [{i}] {row['shortcode']}")
+        log.info(f"      Meme: {(row['meme_desc'] or '')[:60]}")
+        log.info(f"      Tags: {', '.join(cats[:3])}")
+        log.info(f"      Clip: {row['clip_desc'] or row['clip_id'][:25]} ({row['mood'] or '?'})")
+        log.info(f"      File: {row['filename'] or '?'}")
+        log.info(f"      Score: {row['accuracy']:.0f}%")
+        log.info(f"      Caption: {caption_str}")
+        log.info(f"      Status: {row['status']}")
+        log.info(f"")
+    
+    log.info(f"{'='*60}")
+    log.info(f"   Siguiente: python 7_generate_video.py")
+    log.info(f"{'='*60}")
+
+
 def start_local_server():
     os.chdir(str(SCRIPT_DIR))
     handler = http.server.SimpleHTTPRequestHandler
@@ -669,6 +726,7 @@ def main():
     parser = argparse.ArgumentParser(description="Catalogo de Matches - Interfaz de Decision")
     parser.add_argument('--apply', action='store_true', help="Aplicar decisiones del JSON")
     parser.add_argument('--export', action='store_true', help="Exportar decisiones para analisis")
+    parser.add_argument('--confirmed', action='store_true', help="Ver matches confirmados (cola de generacion)")
     parser.add_argument('--results-path', type=str, default=None)
     args = parser.parse_args()
     
@@ -683,6 +741,10 @@ def main():
     
     if args.export:
         export_decisions()
+        return
+    
+    if args.confirmed:
+        show_confirmed()
         return
     
     # Generate HTML
