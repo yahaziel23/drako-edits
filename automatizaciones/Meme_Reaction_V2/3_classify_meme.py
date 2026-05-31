@@ -61,7 +61,7 @@ except ImportError:
 # PROMPT
 # =============================================================================
 
-PROMPT_VERSION = 1
+PROMPT_VERSION = 2
 
 SYSTEM_PROMPT = """Eres un experto analizador de memes para un canal de videos de reaccion.
 Tu trabajo es clasificar memes con precision para un pipeline automatizado.
@@ -75,21 +75,21 @@ USER_PROMPT_TEMPLATE = """Analiza este meme y devuelve un JSON con la siguiente 
   "es_video_real": true/false,
   "confianza": 0.0-1.0,
   "categorias": ["tag1", "tag2", ...],
-  "descripcion": "descripcion detallada del meme, que muestra, que dice el texto, que significa",
+  "descripcion": "descripcion detallada del meme",
   "ideas_video": [
-    "idea 1 de como usar este meme en un video de reaccion",
+    "idea 1",
     "idea 2",
     "idea 3",
     "idea 4",
     "idea 5"
   ],
-  "background_color": "#RRGGBB o descripcion del color de fondo",
+  "background_color": "#RRGGBB",
   "dia_especial": null o "viernes"/"halloween"/"navidad"/etc
 }}
 
 REGLAS:
 - "valido": false si es publicidad, selfie, paisaje, foto random sin humor, o contenido que no sirve como meme
-- "es_video_real": true si la imagen es un frame de video que NO funciona como meme estatico (ej: frame borroso, sin contexto sin el audio/movimiento)
+- "es_video_real": true si la imagen es un frame de video que NO funciona como meme estatico (ej: frame borroso, sin contexto sin audio)
 - "categorias": escoge 2-6 tags de esta lista (o inventa uno si nada aplica):
 
   FORMATO: formato_texto_arriba_imagen_abajo, formato_solo_imagen, formato_texto_overlay, formato_dos_paneles, formato_multi_panel, formato_screenshot_chat, formato_screenshot_tweet, formato_screenshot_comentario, formato_reaccion_con_caption, formato_edit_shitpost, formato_lista_ranking
@@ -105,10 +105,22 @@ REGLAS:
   TONO: tono_suave, tono_medio, tono_fuerte, tono_NSFW_light
 
 - OBLIGATORIO al menos 1 tag de FORMATO + 1 tag de HUMOR
-- "ideas_video": 5 ideas creativas. Cada idea debe describir: que tipo de clip de reaccion queda, que caption/texto poner, y como estructurar el video
+
+- "ideas_video": 5 ideas DIFERENTES para usar este meme en un video corto.
+  ESTRUCTURA FIJA (la unica por ahora): el video es MEME (imagen) + CAPTION (texto corto opcional sobre el meme) + CLIP DE REACCION (video corto de alguien reaccionando).
+  Para cada idea escribe SOLO:
+    1. Que tipo de clip de reaccion queda (descripcion del clip ideal, ej: "persona riendose a carcajadas", "alguien escupiendo agua de risa")
+    2. Un caption CORTO para poner sobre el meme (maximo 6-8 palabras, estilo TikTok/Reels). Si no necesita caption escribe "sin caption".
+  
+  IMPORTANTE sobre las ideas:
+  - Las 5 ideas DEBEN ser coherentes con el TONO del meme. Si el meme es gracioso, las 5 reacciones deben ser humoristicas/de risa. NO mezcles reacciones de nostalgia, confusion o analisis si el meme es puramente comico.
+  - Formato de cada idea: "Clip: [descripcion del clip]. Caption: [texto corto o 'sin caption']"
+  - NO describas la estructura del video (ya es fija). Solo el clip y el caption.
+  - Se CREATIVO y VARIADO en los clips. No repitas el mismo tipo de reaccion.
+
 - "background_color": el color hexadecimal dominante del fondo del meme
 - "dia_especial": solo si el meme es especifico para un dia/fecha (null si es generico)
-- "descripcion": se DETALLADO. Alguien que no ve la imagen debe entender el meme completo con tu descripcion
+- "descripcion": se DETALLADO. Alguien que no ve la imagen debe entender el meme completo con tu descripcion. Incluye: que se ve en la imagen, que dice el texto, cual es el chiste/referencia.
 """
 
 

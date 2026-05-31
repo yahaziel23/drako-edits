@@ -128,7 +128,7 @@ def generate_html(memes):
         # Ideas as list
         ideas_html = ''
         for idx, idea in enumerate(m['ideas_video'], 1):
-            ideas_html += '<li>' + str(idx) + '. ' + idea + '</li>'
+            ideas_html += '<li class="idea-item" data-sc="' + sc + '" data-idx="' + str(idx) + '" onclick="pickIdea(\'' + sc + '\',' + str(idx) + ')">' + str(idx) + '. ' + idea + '</li>'
         
         # Status badge
         valid_badge = '<span class="badge ok">VALIDO</span>' if m['valido'] else '<span class="badge bad">INVALIDO</span>'
@@ -213,7 +213,9 @@ def generate_html(memes):
     html_parts.append('details{margin-bottom:8px}')
     html_parts.append('summary{font-size:0.75em;color:#aaa;cursor:pointer}')
     html_parts.append('.ideas{font-size:0.72em;color:#bbb;padding-left:15px;margin-top:5px}')
-    html_parts.append('.ideas li{margin-bottom:4px;line-height:1.3}')
+    html_parts.append('.ideas li{margin-bottom:4px;line-height:1.3;cursor:pointer;padding:3px 5px;border-radius:4px;transition:background 0.15s}
+.ideas li:hover{background:#1a3a5c}
+.ideas li.picked{background:#1b4332;border-left:3px solid #4CAF50}')
     html_parts.append('.bg-color{font-size:0.7em;color:#888;display:flex;align-items:center;gap:5px;margin-bottom:5px}')
     html_parts.append('.color-swatch{width:14px;height:14px;border-radius:3px;border:1px solid #555;display:inline-block}')
     html_parts.append('.dia{font-size:0.7em;color:#ff9800;margin-bottom:5px}')
@@ -234,7 +236,7 @@ def generate_html(memes):
     html_parts.append('<div class="zo" id="zo" onclick="this.classList.remove(\'active\')">')
     html_parts.append('<img id="zi" src=""></div>')
     html_parts.append('<script>')
-    html_parts.append('var D={};var notes={};')
+    html_parts.append('var D={};var notes={};var picks={};')
     html_parts.append('function markOk(sc){D[sc]="ok";document.getElementById("c-"+sc).className="card marked-ok";upd();}')
     html_parts.append('function markReclassify(sc){D[sc]="reclassify";document.getElementById("c-"+sc).className="card marked-reclassify";upd();}')
     html_parts.append('function markReject(sc){D[sc]="reject";document.getElementById("c-"+sc).className="card marked-reject";upd();}')
@@ -244,14 +246,15 @@ def generate_html(memes):
     html_parts.append('document.getElementById("sok").textContent="OK: "+ok;')
     html_parts.append('document.getElementById("sre").textContent="Reclasificar: "+re;')
     html_parts.append('document.getElementById("srj").textContent="Rechazar: "+rj;}')
-    html_parts.append('function saveResults(){')
+    html_parts.append('function pickIdea(sc,idx){picks[sc]=idx;var card=document.getElementById('c-'+sc);card.querySelectorAll('.idea-item').forEach(function(li){li.classList.remove('picked');});card.querySelector('[data-idx="'+idx+'"]').classList.add('picked');}
+function saveResults(){')
     html_parts.append('document.querySelectorAll(".notes").forEach(function(ta){if(ta.value.trim())notes[ta.dataset.sc]=ta.value.trim();});')
     html_parts.append('var t=Object.keys(D).length;')
-    html_parts.append('var data={timestamp:new Date().toISOString(),total_decisions:t,decisions:D,feedback:notes};')
+    html_parts.append('var data={timestamp:new Date().toISOString(),total_decisions:t,decisions:D,feedback:notes,idea_picks:picks};')
     html_parts.append('var blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});')
     html_parts.append('var url=URL.createObjectURL(blob);var a=document.createElement("a");')
     html_parts.append('a.href=url;a.download="view_results.json";a.click();URL.revokeObjectURL(url);')
-    html_parts.append('alert("Guardado: "+t+" decisiones + "+Object.keys(notes).length+" notas.\\n\\nCorre: python view_clasificados.py --apply");}')
+    html_parts.append('alert("Guardado: "+t+" decisiones, "+Object.keys(notes).length+" notas, "+Object.keys(picks).length+" ideas seleccionadas.\\n\\nCorre: python view_clasificados.py --apply");}')
     html_parts.append('console.log("ViewClasificados OK: "+document.querySelectorAll(".card").length+" cards");')
     html_parts.append('</script></body></html>')
     
@@ -309,9 +312,23 @@ def apply_results(results_path=None):
             update_meme_status(shortcode, 'descartado_ia')
             reject_count += 1
     
+    # Guardar idea picks (idea favorita seleccionada por el usuario)
+    idea_picks = data.get('idea_picks', {})
+    for shortcode, idx in idea_picks.items():
+        db.execute(
+            "UPDATE clasificaciones SET ideas_video = json_set(COALESCE(ideas_video,'[]'), '$.picked', ?) WHERE shortcode = ?",
+            (int(idx), shortcode)
+        )
+    picks_count = len(idea_picks)
+
     # Guardar feedback
     for shortcode, note in feedback.items():
         if note.strip():
+            # Delete old feedback for this shortcode+step to avoid duplicates
+            db.execute(
+                "DELETE FROM user_feedback WHERE shortcode = ? AND step = 'classify_qa'",
+                (shortcode,)
+            )
             db.execute("""
                 INSERT INTO user_feedback (shortcode, step, user_said, decision)
                 VALUES (?, 'classify_qa', ?, 'feedback')
@@ -325,6 +342,7 @@ def apply_results(results_path=None):
     log.info("   VIEW CLASIFICADOS - APLICADO")
     log.info("=" * 50)
     log.info(f"   OK (confirmados):        {ok_count}")
+    log.info(f"   Ideas seleccionadas:     {picks_count}")
     log.info(f"   Reclasificar:            {reclassify_count}")
     log.info(f"   Rechazados:              {reject_count}")
     log.info(f"   Notas guardadas:         {feedback_count}")
