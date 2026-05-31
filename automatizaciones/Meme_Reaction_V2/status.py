@@ -7,9 +7,9 @@ Muestra el estado completo del pipeline en un vistazo.
 Lee de SQLite y presenta conteos por cada cola/status.
 
 Uso:
-    python status.py              # Resumen rápido
+    python status.py              # Resumen rapido
     python status.py --detailed   # Desglose por perfil
-    python status.py --telegram   # Envía resumen por Telegram
+    python status.py --telegram   # Envia resumen por Telegram
 """
 
 import sys
@@ -17,7 +17,6 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 
-# Setup path para imports locales
 SCRIPT_DIR = Path(__file__).parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
@@ -30,10 +29,6 @@ from utils.rate_limiter import RateLimiter
 # =============================================================================
 
 def get_status_counts(db):
-    """
-    Obtiene conteos agrupados por status de la tabla memes.
-    Returns: dict {status: count}
-    """
     rows = db.execute(
         "SELECT status, COUNT(*) as cnt FROM memes GROUP BY status ORDER BY cnt DESC"
     ).fetchall()
@@ -41,10 +36,6 @@ def get_status_counts(db):
 
 
 def get_source_type_counts(db):
-    """
-    Conteos por source_type (foto vs frame).
-    Returns: dict {source_type: count}
-    """
     rows = db.execute(
         "SELECT source_type, COUNT(*) as cnt FROM memes GROUP BY source_type"
     ).fetchall()
@@ -52,70 +43,95 @@ def get_source_type_counts(db):
 
 
 def get_profile_counts(db):
-    """
-    Conteos por perfil de origen.
-    Returns: dict {profile: count}
-    """
     rows = db.execute(
         "SELECT source_profile, COUNT(*) as cnt FROM memes GROUP BY source_profile ORDER BY cnt DESC"
     ).fetchall()
     return {row['source_profile']: row['cnt'] for row in rows}
 
 
+def get_clips_stats(db):
+    """Estadisticas completas de clips."""
+    total = db.execute("SELECT COUNT(*) as cnt FROM clips").fetchone()['cnt']
+    
+    approved = 0
+    categorized = 0
+    try:
+        approved = db.execute("SELECT COUNT(*) as cnt FROM clips WHERE COALESCE(approved, 0) = 1").fetchone()['cnt']
+    except Exception:
+        pass
+    try:
+        categorized = db.execute("SELECT COUNT(*) as cnt FROM clips WHERE categorizado_ia_at IS NOT NULL").fetchone()['cnt']
+    except Exception:
+        pass
+    
+    pending_cat = approved - categorized if approved > categorized else 0
+    
+    return {
+        'total': total,
+        'approved': approved,
+        'categorized': categorized,
+        'pending_categorize': pending_cat,
+    }
+
+
 def get_match_stats(db):
-    """
-    Estadísticas de matches.
-    Returns: dict con conteos por status de match
-    """
-    rows = db.execute(
-        "SELECT status, match_type, COUNT(*) as cnt FROM matches GROUP BY status, match_type"
-    ).fetchall()
-    stats = {}
-    for row in rows:
-        key = f"{row['status']}_{row['match_type']}"
-        stats[key] = row['cnt']
+    """Estadisticas de la tabla matches."""
+    stats = {'total': 0, 'confirmed': 0, 'auto': 0}
+    try:
+        stats['total'] = db.execute("SELECT COUNT(DISTINCT shortcode) as cnt FROM matches").fetchone()['cnt']
+        stats['confirmed'] = db.execute("SELECT COUNT(DISTINCT shortcode) as cnt FROM matches WHERE match_type = 'confirmed'").fetchone()['cnt']
+        stats['auto'] = db.execute("SELECT COUNT(DISTINCT shortcode) as cnt FROM matches WHERE match_type = 'auto'").fetchone()['cnt']
+    except Exception:
+        pass
     return stats
 
 
 def get_videos_count(db):
-    """Cuenta videos generados."""
-    row = db.execute("SELECT COUNT(*) as cnt FROM videos_generados").fetchone()
-    return row['cnt'] if row else 0
+    try:
+        return db.execute("SELECT COUNT(*) as cnt FROM videos_generados").fetchone()['cnt']
+    except Exception:
+        return 0
 
 
 def get_uploads_count(db):
-    """Cuenta uploads exitosos."""
-    row = db.execute(
-        "SELECT COUNT(*) as cnt FROM uploads WHERE status = 'subido'"
-    ).fetchone()
-    return row['cnt'] if row else 0
-
-
-def get_clips_count(db):
-    """Cuenta clips en catálogo."""
-    row = db.execute("SELECT COUNT(*) as cnt FROM clips").fetchone()
-    return row['cnt'] if row else 0
+    try:
+        return db.execute("SELECT COUNT(*) as cnt FROM uploads WHERE status = 'subido'").fetchone()['cnt']
+    except Exception:
+        return 0
 
 
 def get_today_activity(db):
-    """
-    Actividad del día (posts procesados hoy).
-    """
     today = datetime.now().strftime('%Y-%m-%d')
     
     scraped = db.execute(
         "SELECT COUNT(*) as cnt FROM memes WHERE date(scraped_at) = ?", (today,)
     ).fetchone()['cnt']
     
-    classified = db.execute(
-        "SELECT COUNT(*) as cnt FROM clasificaciones WHERE date(classified_at) = ?", (today,)
-    ).fetchone()['cnt']
+    classified = 0
+    try:
+        classified = db.execute(
+            "SELECT COUNT(*) as cnt FROM clasificaciones WHERE date(classified_at) = ?", (today,)
+        ).fetchone()['cnt']
+    except Exception:
+        pass
     
-    generated = db.execute(
-        "SELECT COUNT(*) as cnt FROM videos_generados WHERE date(generated_at) = ?", (today,)
-    ).fetchone()['cnt']
+    generated = 0
+    try:
+        generated = db.execute(
+            "SELECT COUNT(*) as cnt FROM videos_generados WHERE date(generated_at) = ?", (today,)
+        ).fetchone()['cnt']
+    except Exception:
+        pass
     
     return {'scraped': scraped, 'classified': classified, 'generated': generated}
+
+
+def get_feedback_count(db):
+    """Total de feedback registrado por el usuario."""
+    try:
+        return db.execute("SELECT COUNT(*) as cnt FROM user_feedback").fetchone()['cnt']
+    except Exception:
+        return 0
 
 
 # =============================================================================
@@ -123,18 +139,20 @@ def get_today_activity(db):
 # =============================================================================
 
 SEP = "=" * 60
+SUB = "-" * 44
 
 
 def display_status(detailed=False):
-    """Muestra el status completo del pipeline."""
     db = init_db()
     
     counts = get_status_counts(db)
     source_types = get_source_type_counts(db)
+    clips = get_clips_stats(db)
+    matches = get_match_stats(db)
     today = get_today_activity(db)
-    clips_count = get_clips_count(db)
     videos_count = get_videos_count(db)
     uploads_count = get_uploads_count(db)
+    feedback_count = get_feedback_count(db)
     total_memes = sum(counts.values())
     
     print(f"\n{SEP}")
@@ -142,63 +160,108 @@ def display_status(detailed=False):
     print(f"   {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print(SEP)
     
-    # Totales
-    print(f"   Total memes en DB:   {total_memes}")
-    print(f"   Clips catalogados:   {clips_count}")
-    print(f"   Videos generados:    {videos_count}")
-    print(f"   Subidos a redes:     {uploads_count}")
-    print(f"   {'─' * 40}")
+    # Overview
+    print(f"   Total memes:       {total_memes}")
+    print(f"   Total clips:       {clips['total']}")
+    print(f"   Videos generados:  {videos_count}")
+    print(f"   Subidos a redes:   {uploads_count}")
+    print(f"   Feedback entries:  {feedback_count}")
+    print(f"   {SUB}")
     
-    # Pipeline status
+    # ---- MEMES PIPELINE ----
     print(f"")
-    print(f"   📥 Por descargar:         {counts.get('por_descargar', 0)}")
-    print(f"   🖼️  Descargados (foto):     {source_types.get('foto', 0)}")
-    print(f"   🎥 Descargados (frame):    {source_types.get('frame', 0)}")
+    print(f"   PIPELINE MEMES")
+    print(f"   {SUB}")
+    print(f"   Scrape:")
+    print(f"     Por descargar:         {counts.get('por_descargar', 0)}")
+    desc_foto = 0
+    desc_frame = 0
+    for st in ['listo_clasificar', 'pendiente_review', 'pendiente_match', 'match_review', 'buscar_clip', 'por_generar', 'generado']:
+        pass  # source_types count all, not just descargados
+    print(f"     Descargados (foto):    {source_types.get('foto', 0)}")
+    print(f"     Descargados (frame):   {source_types.get('frame', 0)}")
     print(f"")
-    print(f"   👁️  Pendientes review:      {counts.get('pendiente_review', 0)}")
-    print(f"   ✅ Listos clasificar:     {counts.get('listo_clasificar', 0)}")
-    print(f"   🧠 Clasificados:           {counts.get('clasificado', 0)}")
+    print(f"   Review:")
+    print(f"     Pendientes review:     {counts.get('pendiente_review', 0)}")
+    print(f"     Listos clasificar:     {counts.get('listo_clasificar', 0)}")
     print(f"")
-    print(f"   🎬 Pendiente match:        {counts.get('pendiente_match', 0)}")
-    print(f"   🎬 Matched (auto):         {counts.get('matched_auto', 0)}")
-    print(f"   🎬 Match review (cola):    {counts.get('match_review', 0)}")
-    print(f"   🎬 Buscar clip:            {counts.get('buscar_clip', 0)}")
+    print(f"   Clasificacion:")
+    print(f"     Pendiente match:       {counts.get('pendiente_match', 0)}")
     print(f"")
-    print(f"   🎥 Por generar video:      {counts.get('por_generar', 0)}")
-    print(f"   🎥 Generados:              {counts.get('generado', 0)}")
-    print(f"   📤 Por subir:              {counts.get('por_subir', 0)}")
-    print(f"   📤 Subidos:                {counts.get('subido', 0)}")
+    print(f"   Matching:")
+    print(f"     En review (40-89%):    {counts.get('match_review', 0)}")
+    print(f"     Sin clip (<40%):       {counts.get('buscar_clip', 0)}")
+    print(f"     Confirmados:           {matches.get('confirmed', 0)}")
     print(f"")
+    print(f"   Generacion:")
+    print(f"     Por generar:           {counts.get('por_generar', 0)}")
+    print(f"     Generados:             {counts.get('generado', 0)}")
+    print(f"     Por subir:             {counts.get('por_subir', 0)}")
+    print(f"     Subidos:               {counts.get('subido', 0)}")
     
-    # Terminal states
+    # Terminal
     rechazados = counts.get('rechazado', 0)
     descartados = counts.get('descartado_ia', 0)
     if rechazados or descartados:
-        print(f"   🚫 Rechazados (manual):    {rechazados}")
-        print(f"   🚫 Descartados (IA):       {descartados}")
         print(f"")
+        print(f"   Descartados:")
+        print(f"     Rechazados (manual):   {rechazados}")
+        print(f"     Descartados (IA):      {descartados}")
     
-    # Actividad de hoy
-    print(f"   {'─' * 40}")
-    print(f"   Hoy: +{today['scraped']} scrapeados, "
-          f"+{today['classified']} clasificados, "
-          f"+{today['generated']} generados")
-    
-    # Rate limits
+    # ---- CLIPS PIPELINE ----
     print(f"")
-    print(f"   {'─' * 40}")
+    print(f"   {SUB}")
+    print(f"   PIPELINE CLIPS")
+    print(f"   {SUB}")
+    print(f"     Total:                 {clips['total']}")
+    print(f"     Aprobados:             {clips['approved']}")
+    print(f"     Categorizados (IA):    {clips['categorized']}")
+    print(f"     Pendientes IA:         {clips['pending_categorize']}")
+    
+    # ---- HOY ----
+    print(f"")
+    print(f"   {SUB}")
+    print(f"   HOY: +{today['scraped']} scrape, +{today['classified']} clasificar, +{today['generated']} generar")
+    
+    # ---- API BUDGET ----
+    print(f"")
+    print(f"   {SUB}")
     print(f"   API Budget:")
     for api in ['openai', 'instagram']:
-        limiter = RateLimiter(api)
-        print(f"     {limiter.get_summary()}")
+        try:
+            limiter = RateLimiter(api)
+            print(f"     {limiter.get_summary()}")
+        except Exception:
+            pass
     
     print(SEP)
     
-    # Detailed: por perfil
+    # ---- NEXT STEPS (automatic suggestions) ----
+    print(f"")
+    print(f"   SIGUIENTE PASO SUGERIDO:")
+    if counts.get('por_descargar', 0) > 0:
+        print(f"     python 2_download_memes.py")
+    elif counts.get('pendiente_review', 0) > 0:
+        print(f"     python batch_review.py")
+    elif counts.get('listo_clasificar', 0) > 0:
+        print(f"     python 3_classify_meme.py")
+    elif clips['pending_categorize'] > 0:
+        print(f"     python 3b_categorizar_clips.py")
+    elif counts.get('pendiente_match', 0) > 0:
+        print(f"     python 4_match_clip.py")
+    elif counts.get('match_review', 0) > 0:
+        print(f"     python catalogo_matches.py")
+    elif counts.get('por_generar', 0) > 0:
+        print(f"     python 7_generate_video.py")
+    else:
+        print(f"     Todo al dia! Scrapea mas o descarga mas clips.")
+    print(f"")
+    
+    # Detailed
     if detailed:
         profiles = get_profile_counts(db)
-        print(f"\n   DESGLOSE POR PERFIL:")
-        print(f"   {'─' * 40}")
+        print(f"   DESGLOSE POR PERFIL:")
+        print(f"   {SUB}")
         for profile, count in profiles.items():
             print(f"   @{profile}: {count} posts")
         print(f"")
@@ -207,40 +270,34 @@ def display_status(detailed=False):
 
 
 def get_status_text():
-    """
-    Genera texto del status (para Telegram).
-    Versión sin emojis fancy, plain text.
-    """
     db = init_db()
     counts = get_status_counts(db)
+    clips = get_clips_stats(db)
     today = get_today_activity(db)
     total = sum(counts.values())
     
     lines = [
-        f"Total: {total} memes",
+        f"Total: {total} memes | {clips['total']} clips",
         f"",
         f"Por descargar: {counts.get('por_descargar', 0)}",
         f"Pendientes review: {counts.get('pendiente_review', 0)}",
         f"Listos clasificar: {counts.get('listo_clasificar', 0)}",
         f"Pendiente match: {counts.get('pendiente_match', 0)}",
+        f"Match review: {counts.get('match_review', 0)}",
         f"Por generar: {counts.get('por_generar', 0)}",
-        f"Por subir: {counts.get('por_subir', 0)}",
+        f"Clips sin categorizar: {clips['pending_categorize']}",
         f"",
         f"Hoy: +{today['scraped']} scrape, +{today['classified']} classify, +{today['generated']} gen",
     ]
     return "\n".join(lines)
 
 
-# =============================================================================
-# MAIN
-# =============================================================================
-
 def main():
     parser = argparse.ArgumentParser(description="Meme Reaction V2 - Status")
     parser.add_argument('--detailed', '-d', action='store_true',
                         help="Muestra desglose por perfil")
     parser.add_argument('--telegram', '-t', action='store_true',
-                        help="Envía resumen por Telegram")
+                        help="Envia resumen por Telegram")
     args = parser.parse_args()
     
     display_status(detailed=args.detailed)
@@ -248,11 +305,11 @@ def main():
     if args.telegram:
         from utils.telegram import send_notification
         text = get_status_text()
-        success = send_notification(f"📊 *Status*\n```\n{text}\n```")
+        success = send_notification(f"Status:\n{text}")
         if success:
-            print("\n   [✓] Resumen enviado por Telegram")
+            print("   [OK] Resumen enviado por Telegram")
         else:
-            print("\n   [!] No se pudo enviar por Telegram")
+            print("   [!] No se pudo enviar por Telegram")
 
 
 if __name__ == "__main__":

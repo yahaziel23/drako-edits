@@ -254,7 +254,20 @@ def match_meme_with_clips(meme, clips, api_key):
     )
     
     raw_text = response.choices[0].message.content.strip()
-    result = json.loads(raw_text)
+    try:
+        result = json.loads(raw_text)
+    except json.JSONDecodeError:
+        # Retry once with lower temperature
+        log.warning(f"    JSON malformado de GPT, reintentando...")
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            max_tokens=1500,
+            temperature=0.1,
+            response_format={"type": "json_object"}
+        )
+        raw_text = response.choices[0].message.content.strip()
+        result = json.loads(raw_text)
     
     # Log usage
     usage = response.usage
@@ -288,13 +301,24 @@ def save_matches(shortcode, match_result, clips_lookup):
         captions = json.dumps(m.get('captions', []), ensure_ascii=False)
         
         # Validate clip_id exists (GPT sometimes modifies IDs slightly)
+        if not clip_id or len(clip_id) < 5:
+            log.warning(f"    Clip ID vacio/invalido (skip)")
+            continue
         if clip_id not in valid_clips:
-            # Try fuzzy match (find closest)
+            # Try fuzzy match (find closest by substring)
             matched_id = None
             for vid in valid_clips:
-                if clip_id in vid or vid in clip_id:
+                if len(clip_id) > 8 and (clip_id in vid or vid in clip_id):
                     matched_id = vid
                     break
+            # Also try matching by the unique hash suffix (last 4 chars)
+            if not matched_id and len(clip_id) > 4:
+                suffix = clip_id.split('_')[-1] if '_' in clip_id else ''
+                if len(suffix) >= 4:
+                    for vid in valid_clips:
+                        if vid.endswith(suffix):
+                            matched_id = vid
+                            break
             if matched_id:
                 log.warning(f"    Clip ID corregido: {clip_id[:30]} -> {matched_id[:30]}")
                 clip_id = matched_id
