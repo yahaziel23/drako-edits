@@ -23,7 +23,7 @@ Uso:
     python 3_classify_meme.py --reclasificar --version 2  # Solo los de prompt v2
     python 3_classify_meme.py --dry-run         # Muestra que haria sin gastar tokens
 
-Dependencias: openai, Pillow
+Dependencias: openai, Pillow, python-dotenv
 """
 
 import sys
@@ -36,7 +36,12 @@ import hashlib
 from pathlib import Path
 from datetime import datetime
 
+# Cargar .env ANTES de todo
+from dotenv import load_dotenv
+
 SCRIPT_DIR = Path(__file__).parent
+load_dotenv(SCRIPT_DIR / '.env')  # Busca .env en la carpeta del proyecto
+
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from utils.db import init_db, get_db, update_meme_status, log_api_request
@@ -237,7 +242,6 @@ def get_memes_to_classify(max_count=None, reclasificar=False, version_filter=Non
     
     if reclasificar:
         if version_filter is not None:
-            # Solo los clasificados con una version especifica
             rows = db.execute("""
                 SELECT m.shortcode, m.image_path, m.image_hash
                 FROM memes m
@@ -246,7 +250,6 @@ def get_memes_to_classify(max_count=None, reclasificar=False, version_filter=Non
                 ORDER BY m.likes DESC
             """, (version_filter,)).fetchall()
         else:
-            # Todos los clasificados
             rows = db.execute("""
                 SELECT m.shortcode, m.image_path, m.image_hash
                 FROM memes m
@@ -254,7 +257,6 @@ def get_memes_to_classify(max_count=None, reclasificar=False, version_filter=Non
                 ORDER BY m.likes DESC
             """).fetchall()
     else:
-        # Normal: solo listo_clasificar
         rows = db.execute("""
             SELECT shortcode, image_path, image_hash
             FROM memes
@@ -346,7 +348,7 @@ def main():
         api_key = os.environ.get('OPENAI_API_KEY')
         if not api_key:
             log.error("OPENAI_API_KEY no encontrada en environment.")
-            log.error("  Verifica tu .env")
+            log.error("  Verifica tu .env en la carpeta del proyecto.")
             return
         client = OpenAI(api_key=api_key)
 
@@ -370,10 +372,8 @@ def main():
             cached = check_hash_cache(meme['image_hash'])
             if cached:
                 log.info(f"    -> CACHE HIT (mismo hash que {cached['shortcode']})")
-                # Copiar clasificacion
                 result = json.loads(cached['raw_response'])
                 save_classification(shortcode, result, {'total_tokens': 0}, PROMPT_VERSION)
-                # Actualizar status
                 if result.get('valido') and not result.get('es_video_real'):
                     update_meme_status(shortcode, 'pendiente_match')
                 else:
