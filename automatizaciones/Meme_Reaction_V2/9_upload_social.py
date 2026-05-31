@@ -338,6 +338,134 @@ def generate_all_metadata():
     log.info(f"  Metadata generada para {generated} videos")
 
 
+
+# ============================================================
+# AUTO-SCHEDULING (find next available slot)
+# ============================================================
+
+DAILY_SLOTS = [8, 12, 16, 19, 22]  # 8am, 12pm, 4pm, 7pm, 10pm (Mexico City)
+TIMEZONE = 'America/Mexico_City'
+
+
+def get_scheduled_videos(youtube):
+    """Obtiene videos programados (privados con publishAt en el futuro)."""
+    from zoneinfo import ZoneInfo
+    
+    utc = ZoneInfo('UTC')
+    now_utc = datetime.now(utc)
+    
+    # Search my uploads that are private (scheduled = private + publishAt)
+    scheduled_times = []
+    
+    try:
+        # Get my channel's uploads playlist
+        channels_response = youtube.channels().list(
+            part='contentDetails',
+            mine=True
+        ).execute()
+        
+        uploads_playlist = channels_response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+        
+        # Get recent videos from uploads
+        videos_response = youtube.playlistItems().list(
+            part='contentDetails',
+            playlistId=uploads_playlist,
+            maxResults=50
+        ).execute()
+        
+        video_ids = [item['contentDetails']['videoId'] for item in videos_response.get('items', [])]
+        
+        if not video_ids:
+            return scheduled_times
+        
+        # Get status details for these videos
+        for i in range(0, len(video_ids), 50):
+            batch = video_ids[i:i+50]
+            details = youtube.videos().list(
+                part='status',
+                id=','.join(batch)
+            ).execute()
+            
+            for video in details.get('items', []):
+                status = video.get('status', {})
+                publish_at = status.get('publishAt')
+                if publish_at and status.get('privacyStatus') == 'private':
+                    # Parse publishAt (ISO 8601)
+                    try:
+                        dt = datetime.fromisoformat(publish_at.replace('Z', '+00:00'))
+                        if dt > now_utc:
+                            scheduled_times.append(dt)
+                    except Exception:
+                        pass
+    
+    except Exception as e:
+        get_logger().warning(f"  No se pudo consultar videos programados: {e}")
+    
+    return scheduled_times
+
+
+def find_next_available_slots(youtube, num_slots=5):
+    """Encuentra los proximos N slots disponibles segun horarios diarios."""
+    from zoneinfo import ZoneInfo
+    
+    local_tz = ZoneInfo(TIMEZONE)
+    utc_tz = ZoneInfo('UTC')
+    now_local = datetime.now(local_tz)
+    
+    # Get already scheduled times
+    scheduled_utc = get_scheduled_videos(youtube)
+    scheduled_local = [dt.astimezone(local_tz) for dt in scheduled_utc]
+    
+    # Build set of occupied slots (date + hour)
+    occupied = set()
+    for dt in scheduled_local:
+        occupied.add((dt.date(), dt.hour))
+    
+    # Find available slots starting from now
+    available = []
+    check_date = now_local.date()
+    max_days_ahead = 30  # Look up to 30 days ahead
+    
+    for day_offset in range(max_days_ahead):
+        current_date = check_date + timedelta(days=day_offset)
+        
+        for hour in DAILY_SLOTS:
+            slot_dt = datetime(current_date.year, current_date.month, current_date.day,
+                             hour, 0, 0, tzinfo=local_tz)
+            
+            # Skip slots in the past
+            if slot_dt <= now_local:
+                continue
+            
+            # Skip occupied slots
+            if (current_date, hour) in occupied:
+                continue
+            
+            available.append(slot_dt)
+            
+            if len(available) >= num_slots:
+                return available
+    
+    return available
+
+
+def auto_assign_schedule(youtube, num_videos):
+    """Asigna automaticamente los proximos slots disponibles."""
+    log = get_logger()
+    from zoneinfo import ZoneInfo
+    
+    slots = find_next_available_slots(youtube, num_videos)
+    
+    if not slots:
+        log.warning("No se encontraron slots disponibles en los proximos 30 dias")
+        return []
+    
+    log.info(f"  Slots auto-asignados:")
+    for i, slot in enumerate(slots):
+        log.info(f"    [{i+1}] {slot.strftime('%Y-%m-%d %H:%M')} ({TIMEZONE})")
+    
+    return slots
+
 # ============================================================
 # HTML INTERFACE (Scheduling + Review)
 # ============================================================
@@ -346,12 +474,15 @@ def generate_scheduler_html(videos):
     """Genera HTML para revisar metadata y programar uploads."""
     total = len(videos)
     
-    # Default schedule: tomorrow at different hours
-    now = datetime.now()
-    default_dates = []
-    for i in range(total):
-        scheduled = now + timedelta(days=1+i, hours=10)  # 10am, next days
-        default_dates.append(scheduled.strftime('%Y-%m-%dT%H:%M'))
+    # Default dates will be passed in (auto-scheduled)
+    # Fallback if no auto-schedule
+    default_dates = getattr(generate_scheduler_html, '_auto_dates', [])
+    if not default_dates:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo(TIMEZONE))
+        for i in range(total):
+            scheduled = now + timedelta(days=1, hours=i*3)
+            default_dates.append(scheduled.strftime('%Y-%m-%dT%H:%M'))
     
     html_parts = []
     html_parts.append('<!DOCTYPE html><html><head><meta charset="UTF-8">')
@@ -628,6 +759,7 @@ def main():
     parser.add_argument('--upload', action='store_true', help="Ejecuta uploads pendientes")
     parser.add_argument('--apply', action='store_true', help="Aplica schedule del JSON")
     parser.add_argument('--auth', action='store_true', help="Solo autenticar con YouTube")
+    parser.add_argument('--auto', action='store_true', help="Full auto: meta + schedule + upload")
     parser.add_argument('--status', action='store_true', help="Ver estado de uploads")
     parser.add_argument('--results-path', type=str, default=None)
     args = parser.parse_args()
@@ -655,6 +787,38 @@ def main():
         execute_uploads()
         return
     
+    if args.auto:
+        # Full auto: generate meta + auto-schedule + upload
+        generate_all_metadata()
+        videos = get_videos_for_upload()
+        if not videos:
+            log.info("No hay videos para programar.")
+            return
+        log.info("Auto-scheduling...")
+        try:
+            youtube = get_youtube_service()
+            slots = find_next_available_slots(youtube, len(videos))
+        except Exception as e:
+            log.error(f"Error conectando YouTube: {e}")
+            return
+        db = get_db()
+        for i, v in enumerate(videos):
+            if i < len(slots):
+                from zoneinfo import ZoneInfo
+                local_tz = ZoneInfo(TIMEZONE)
+                utc_tz = ZoneInfo('UTC')
+                slot_utc = slots[i].astimezone(utc_tz)
+                publish_at = slot_utc.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+                db.execute("""
+                    UPDATE uploads SET scheduled_at = ?
+                    WHERE video_id = ? AND status = 'pendiente'
+                """, (slots[i].strftime('%Y-%m-%dT%H:%M'), v['video_id']))
+                log.info(f"  {v['shortcode']} -> {slots[i].strftime('%Y-%m-%d %H:%M')} MX")
+        db.commit()
+        log.info("Subiendo con auto-schedule...")
+        execute_uploads()
+        return
+    
     if args.generate_meta:
         generate_all_metadata()
         return
@@ -670,13 +834,26 @@ def main():
             log.info(f"  {r['status']}: {r['cnt']}")
         return
     
-    # Default: generate metadata + open scheduler interface
+    # Default: generate metadata + auto-schedule + open interface
     generate_all_metadata()
     
     videos = get_videos_for_upload()
     if not videos:
         log.info("No hay videos para programar.")
         return
+    
+    # Auto-assign schedule slots
+    log.info("Consultando YouTube para slots disponibles...")
+    try:
+        youtube = get_youtube_service()
+        slots = find_next_available_slots(youtube, len(videos))
+        auto_dates = [s.strftime('%Y-%m-%dT%H:%M') for s in slots]
+        generate_scheduler_html._auto_dates = auto_dates
+        log.info(f"  {len(auto_dates)} slots encontrados")
+    except Exception as e:
+        log.warning(f"  No se pudo auto-programar: {e}")
+        log.info("  Usa la interfaz para asignar horarios manualmente")
+        generate_scheduler_html._auto_dates = []
     
     html = generate_scheduler_html(videos)
     META_HTML.write_text(html, encoding='utf-8')
