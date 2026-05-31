@@ -88,6 +88,7 @@ Responde con un JSON valido (sin markdown, sin ```):
 
 REGLAS:
 - Devuelve MAXIMO 5 matches, ordenados de mayor a menor compatibilidad
+- clip_id: DEBE ser el ID EXACTO entre corchetes [] (ej: "clip_SuQ7aLf90QM_96aa"). NO inventes IDs.
 - compatibilidad: 0-100 (100 = match perfecto)
 - Si NINGUN clip supera 70%, agrega 3-5 sugerencias de busqueda YouTube
 - Captions: max 6-8 palabras, humor mexicano/latino, estilo TikTok
@@ -171,11 +172,11 @@ def get_categorized_clips():
 def build_clips_info(clips):
     """Formatea info de clips para el prompt."""
     parts = []
-    for i, c in enumerate(clips):
+    for c in clips:
         cats_str = ', '.join(c['categorias'][:5])
         compat_str = ' | '.join(c['compatibilidad_meme'][:3])
         parts.append(
-            f"CLIP {i+1} (id: {c['id']}):\n"
+            f"[{c['id']}]\n"
             f"  Descripcion: {c['descripcion_corta']}\n"
             f"  Tags: {cats_str}\n"
             f"  Mood: {c['mood']} | Intensidad: {c['intensidad']}/10\n"
