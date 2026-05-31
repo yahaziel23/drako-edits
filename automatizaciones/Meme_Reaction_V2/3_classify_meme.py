@@ -40,7 +40,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 SCRIPT_DIR = Path(__file__).parent
-load_dotenv(SCRIPT_DIR / '.env')  # Busca .env en la carpeta del proyecto
+load_dotenv(SCRIPT_DIR / '.env')
 
 sys.path.insert(0, str(SCRIPT_DIR))
 
@@ -152,7 +152,6 @@ def classify_single_meme(client, image_path, model='gpt-4o'):
         temperature=0.3,
     )
     
-    # Extraer respuesta
     content = response.choices[0].message.content.strip()
     
     # Limpiar posibles markdown fences
@@ -164,10 +163,8 @@ def classify_single_meme(client, image_path, model='gpt-4o'):
         content = content[4:]
     content = content.strip()
     
-    # Parsear JSON
     result = json.loads(content)
     
-    # Extraer usage
     usage = {
         'prompt_tokens': response.usage.prompt_tokens,
         'completion_tokens': response.usage.completion_tokens,
@@ -181,9 +178,45 @@ def classify_single_meme(client, image_path, model='gpt-4o'):
 # DATABASE: guardar clasificacion
 # =============================================================================
 
+REQUIRED_COLUMNS = [
+    'shortcode', 'valido', 'es_video_real', 'confianza', 'categorias',
+    'descripcion', 'ideas_video', 'background_color', 'dia_especial',
+    'prompt_version', 'tokens_used', 'classified_at', 'raw_response'
+]
+
+
 def ensure_clasificaciones_table():
-    """Crea tabla clasificaciones si no existe."""
+    """
+    Asegura que la tabla clasificaciones tenga el schema correcto.
+    Si existe con schema viejo (sin prompt_version, etc), la dropea y recrea.
+    """
     db = get_db()
+    
+    # Verificar si la tabla existe
+    exists = db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='clasificaciones'"
+    ).fetchone()
+    
+    if exists:
+        # Verificar que tenga todas las columnas necesarias
+        columns = [row[1] for row in db.execute("PRAGMA table_info(clasificaciones)").fetchall()]
+        missing = [c for c in REQUIRED_COLUMNS if c not in columns]
+        
+        if missing:
+            # Schema viejo - contar filas para decidir
+            count = db.execute("SELECT COUNT(*) FROM clasificaciones").fetchone()[0]
+            if count == 0:
+                # Tabla vacia con schema viejo -> drop y recrear
+                db.execute("DROP TABLE clasificaciones")
+                db.commit()
+            else:
+                # Tiene datos - agregar columnas faltantes
+                for col in missing:
+                    db.execute(f"ALTER TABLE clasificaciones ADD COLUMN {col} TEXT")
+                db.commit()
+                return
+    
+    # Crear con schema completo
     db.execute("""
         CREATE TABLE IF NOT EXISTS clasificaciones (
             shortcode TEXT PRIMARY KEY,
@@ -289,13 +322,17 @@ def check_hash_cache(image_hash):
     if not image_hash:
         return None
     db = get_db()
-    row = db.execute("""
-        SELECT c.* FROM clasificaciones c
-        JOIN memes m ON c.shortcode = m.shortcode
-        WHERE m.image_hash = ? AND c.prompt_version = ?
-        LIMIT 1
-    """, (image_hash, PROMPT_VERSION)).fetchone()
-    return dict(row) if row else None
+    try:
+        row = db.execute("""
+            SELECT c.* FROM clasificaciones c
+            JOIN memes m ON c.shortcode = m.shortcode
+            WHERE m.image_hash = ? AND c.prompt_version = ?
+            LIMIT 1
+        """, (image_hash, PROMPT_VERSION)).fetchone()
+        return dict(row) if row else None
+    except Exception:
+        # Si la tabla tiene schema viejo, skip cache
+        return None
 
 
 # =============================================================================
