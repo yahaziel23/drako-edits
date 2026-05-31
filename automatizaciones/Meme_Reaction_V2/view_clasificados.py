@@ -151,8 +151,9 @@ def generate_html(memes):
         # Escape description for HTML
         desc_safe = m['descripcion'].replace('"', '&quot;').replace('<', '&lt;').replace('>', '&gt;')
         
+        card_class = 'card marked-ok' if m['status'] == 'pendiente_match' else 'card'
         card = (
-            '<div class="card" id="c-' + sc + '" data-sc="' + sc + '">'
+            '<div class="' + card_class + '" id="c-' + sc + '" data-sc="' + sc + '">'
             '<div class="card-top">'
             '<img src="memes_descargados/' + sc + '.jpg" onclick="zoomIn(this.src)">'
             '<div class="card-actions">'
@@ -253,14 +254,20 @@ def generate_html(memes):
     # === JAVASCRIPT (clean block) ===
     # === JAVASCRIPT ===
     html_parts.append('<script>')
-    # Pre-populate picks from saved data
+    # Pre-populate D (decisions) for already-OK memes and picks from saved data
+    d_init = '{'
+    d_parts = []
+    for m in memes:
+        if m['status'] == 'pendiente_match':
+            d_parts.append('"' + m['shortcode'] + '":"ok"')
+    d_init += ','.join(d_parts) + '}'
     picks_init = '{'
     picks_parts = []
     for m in memes:
         if m.get('saved_pick'):
             picks_parts.append('"' + m['shortcode'] + '":' + str(m['saved_pick']))
     picks_init += ','.join(picks_parts) + '}'
-    html_parts.append('var D={};var notes={};var picks=' + picks_init + ';')
+    html_parts.append('var D=' + d_init + ';var notes={};var picks=' + picks_init + ';')
     html_parts.append('function markOk(sc){D[sc]="ok";document.getElementById("c-"+sc).className="card marked-ok";upd();}')
     html_parts.append('function markReclassify(sc){D[sc]="reclassify";document.getElementById("c-"+sc).className="card marked-reclassify";upd();}')
     html_parts.append('function markReject(sc){D[sc]="reject";document.getElementById("c-"+sc).className="card marked-reject";upd();}')
