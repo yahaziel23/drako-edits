@@ -59,7 +59,7 @@ GAP_RATIO = 0.05       # 5% gap para caption
 
 # Caption config
 CAPTION_SIZES = {'S': 42, 'M': 58, 'L': 76, 'XL': 100}
-CAPTION_FONT = 'Arial'  # Fallback, ffmpeg usa fontfile si existe
+CAPTION_FONT_FILE = 'C:/Windows/Fonts/arialbd.ttf'  # Bold Arial for TikTok style
 STROKE_WIDTH = 3
 
 
@@ -229,15 +229,17 @@ def generate_video(shortcode, meme_image, clip_path, caption, caption_size='M', 
         caption_y = meme_h - int(font_size * 0.8)  # slightly above the gap
         
         # White text with black outline (TikTok style)
+        # Escape colon in fontfile path for ffmpeg filter syntax
+        font_path = CAPTION_FONT_FILE.replace(':', '\\:')
         drawtext = (
             f"drawtext=text='{caption_escaped}'"
+            f":fontfile='{font_path}'"
             f":fontsize={font_size}"
             f":fontcolor=white"
             f":borderw={STROKE_WIDTH}"
             f":bordercolor=black"
             f":x=(w-text_w)/2"
             f":y={caption_y}"
-            f":font='{CAPTION_FONT}'"
         )
         filters.append(f'[v2]{drawtext}[vout]')
         final_video = '[vout]'
@@ -267,10 +269,13 @@ def generate_video(shortcode, meme_image, clip_path, caption, caption_size='M', 
     
     log.info(f"    Generando video ({duration:.1f}s)...")
     
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     
     if result.returncode != 0:
-        log.error(f"    ffmpeg error: {result.stderr[-300:]}")
+        # Show last meaningful error (skip version info)
+        stderr_lines = [l for l in result.stderr.split('\n') if l.strip() and not l.startswith('  lib')]
+        error_msg = '\n'.join(stderr_lines[-5:])
+        log.error(f"    ffmpeg error:\n{error_msg}")
         return None
     
     if not output_path.exists() or output_path.stat().st_size < 10000:
