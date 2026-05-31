@@ -281,8 +281,8 @@ def generate_html(memes_data):
     html_parts.append('<button onclick="filterCards(\'match_review\')">Por revisar (' + str(review_count) + ')</button>')
     if no_match_count > 0:
         html_parts.append('<button onclick="filterCards(\'buscar_clip\')">Sin clip (' + str(no_match_count) + ')</button>')
-    html_parts.append('<button onclick="filterCards(\'decided\')">Decididos</button>')
-    html_parts.append('<button onclick="filterCards(\'pending\')">Sin decidir</button>')
+    html_parts.append('<button id="btn-decided" onclick="filterCards(\'decided\')">Decididos (0)</button>')
+    html_parts.append('<button id="btn-pending" onclick="filterCards(\'pending\')">Sin decidir</button>')
     html_parts.append('</div>')
     
     # Toolbar
@@ -498,6 +498,10 @@ def generate_html(memes_data):
     html_parts.append('  var c=Object.keys(decisions).length;')
     html_parts.append('  document.getElementById("cnt").textContent=c;')
     html_parts.append('  document.getElementById("progress-bar").style.width=(c/total*100)+"%";')
+    html_parts.append('  var dBtn=document.getElementById("btn-decided");')
+    html_parts.append('  if(dBtn)dBtn.textContent="Decididos ("+c+")";')
+    html_parts.append('  var pBtn=document.getElementById("btn-pending");')
+    html_parts.append('  if(pBtn)pBtn.textContent="Sin decidir ("+(total-c)+")";')
     html_parts.append('}')
     html_parts.append('')
     html_parts.append('function saveDecisions(){')
