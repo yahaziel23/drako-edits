@@ -213,9 +213,9 @@ def generate_html(memes):
     html_parts.append('details{margin-bottom:8px}')
     html_parts.append('summary{font-size:0.75em;color:#aaa;cursor:pointer}')
     html_parts.append('.ideas{font-size:0.72em;color:#bbb;padding-left:15px;margin-top:5px}')
-    html_parts.append('.ideas li{margin-bottom:4px;line-height:1.3;cursor:pointer;padding:3px 5px;border-radius:4px;transition:background 0.15s}
-.ideas li:hover{background:#1a3a5c}
-.ideas li.picked{background:#1b4332;border-left:3px solid #4CAF50}')
+    html_parts.append('.ideas li{margin-bottom:4px;line-height:1.3;cursor:pointer;padding:3px 5px;border-radius:4px;transition:background 0.15s}')
+    html_parts.append('.ideas li:hover{background:#1a3a5c}')
+    html_parts.append('.ideas li.picked{background:#1b4332;border-left:3px solid #4CAF50}')
     html_parts.append('.bg-color{font-size:0.7em;color:#888;display:flex;align-items:center;gap:5px;margin-bottom:5px}')
     html_parts.append('.color-swatch{width:14px;height:14px;border-radius:3px;border:1px solid #555;display:inline-block}')
     html_parts.append('.dia{font-size:0.7em;color:#ff9800;margin-bottom:5px}')
