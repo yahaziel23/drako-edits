@@ -23,3 +23,8 @@ numpy>=1.24.0
 
 # --- Telegram notificaciones ---
 # (usa requests, ya incluido arriba)
+
+# --- Upload YouTube (Paso 9) ---
+google-api-python-client>=2.0.0
+google-auth-oauthlib>=1.0.0
+google-auth>=2.0.0
