@@ -98,7 +98,7 @@ def get_video_resolution(filepath):
     return None, None
 
 
-def get_all_clips(only_pending=False):
+def get_all_clips(only_pending=False, only_ia=False):
     """Lee clips de la DB."""
     db = get_db()
     
@@ -111,11 +111,15 @@ def get_all_clips(only_pending=False):
     
     query = """
         SELECT id, descripcion, categorias, filename, source_path, duracion_s, 
-               usado_count, catalogado_at, approved
+               usado_count, catalogado_at, approved,
+               mood, intensidad, audio_analisis, timing, recomendaciones,
+               compatibilidad_meme, descripcion_corta, categorizado_ia_at
         FROM clips
     """
     if only_pending:
         query += " WHERE COALESCE(approved, 0) = 0"
+    elif only_ia:
+        query += " WHERE categorizado_ia_at IS NOT NULL"
     query += " ORDER BY catalogado_at DESC"
     
     rows = db.execute(query).fetchall()
@@ -133,9 +137,32 @@ def get_all_clips(only_pending=False):
         w, h = get_video_resolution(clip_path)
         cats = json.loads(row['categorias']) if row['categorias'] else []
         
+        # Parse IA JSON fields
+        audio_info = {}
+        timing_info = {}
+        recs_info = {}
+        compat_list = []
+        try:
+            audio_info = json.loads(row['audio_analisis']) if row['audio_analisis'] else {}
+        except Exception:
+            pass
+        try:
+            timing_info = json.loads(row['timing']) if row['timing'] else {}
+        except Exception:
+            pass
+        try:
+            recs_info = json.loads(row['recomendaciones']) if row['recomendaciones'] else {}
+        except Exception:
+            pass
+        try:
+            compat_list = json.loads(row['compatibilidad_meme']) if row['compatibilidad_meme'] else []
+        except Exception:
+            pass
+        
         clips.append({
             'id': row['id'],
             'descripcion': row['descripcion'] or '',
+            'descripcion_corta': row['descripcion_corta'] or '',
             'categorias': cats,
             'filename': row['filename'],
             'source_url': row['source_path'] or '',
@@ -147,6 +174,13 @@ def get_all_clips(only_pending=False):
             'width': w,
             'height': h,
             'orientation': 'H' if (w and h and w > h) else 'V' if (w and h) else '?',
+            'mood': row['mood'] or '',
+            'intensidad': row['intensidad'] or 0,
+            'audio_info': audio_info,
+            'timing_info': timing_info,
+            'recs_info': recs_info,
+            'compat_list': compat_list,
+            'categorizado': bool(row['categorizado_ia_at']),
         })
     
     return clips
@@ -194,6 +228,51 @@ def generate_html(clips, audios):
         desc_safe = c['descripcion'].replace('"', '&quot;').replace('<', '&lt;').replace('>', '&gt;')
         url_safe = c['source_url'].replace('"', '&quot;') if c['source_url'] else ''
         
+        # Build IA analysis section (only if categorized)
+        ia_section = ''
+        if c.get('categorizado'):
+            ai = c.get('audio_info', {})
+            ti = c.get('timing_info', {})
+            rc = c.get('recs_info', {})
+            cp = c.get('compat_list', [])
+            
+            ia_parts = []
+            ia_parts.append('<div class="ia-section">')
+            
+            # Audio
+            audio_tipo = ai.get('tipo', '?')
+            audio_desc = ai.get('descripcion', '').replace('"', '&quot;').replace('<', '&lt;')
+            audio_energia = ai.get('energia_audio', '?')
+            beat = 'Si' if ai.get('tiene_beat_drop') else 'No'
+            ia_parts.append('<div class="ia-row"><b>Audio:</b> [' + audio_tipo + '] ' + audio_desc + '</div>')
+            ia_parts.append('<div class="ia-row"><b>Energia:</b> ' + audio_energia + ' | Beat drop: ' + beat + '</div>')
+            
+            # Timing
+            punch = str(ti.get('punch_moment_s', '?'))
+            mejor = str(ti.get('mejor_rango_s', '?'))
+            muerto = ti.get('inicio_muerto_s', 0)
+            ia_parts.append('<div class="ia-row"><b>Punch:</b> @' + punch + 's | Mejor rango: ' + mejor + '</div>')
+            if muerto and muerto > 0:
+                ia_parts.append('<div class="ia-row ia-warn"><b>Inicio muerto:</b> ' + str(muerto) + 's</div>')
+            
+            # Recomendaciones
+            recortar = rc.get('recortar', 'No')
+            audio_sirve = 'Si' if rc.get('audio_original_sirve', True) else 'No'
+            audio_sug = rc.get('audio_sugerencia', '').replace('"', '&quot;').replace('<', '&lt;')
+            meme_ideal = rc.get('meme_ideal', '').replace('"', '&quot;').replace('<', '&lt;')
+            ia_parts.append('<div class="ia-row"><b>Recortar:</b> ' + recortar + '</div>')
+            ia_parts.append('<div class="ia-row"><b>Audio sirve:</b> ' + audio_sirve + '</div>')
+            if audio_sirve == 'No':
+                ia_parts.append('<div class="ia-row ia-suggest"><b>Sugerencia:</b> ' + audio_sug + '</div>')
+            ia_parts.append('<div class="ia-row"><b>Meme ideal:</b> ' + meme_ideal + '</div>')
+            
+            # Compatibilidad
+            if cp:
+                ia_parts.append('<div class="ia-row"><b>Compatible con:</b> ' + ' | '.join(str(x).replace('<','&lt;') for x in cp[:3]) + '</div>')
+            
+            ia_parts.append('</div>')
+            ia_section = ''.join(ia_parts)
+        
         dur_class = 'dur-ok' if 3 <= c['duracion'] <= 12 else 'dur-warn' if 2 <= c['duracion'] < 3 or 12 < c['duracion'] <= 20 else 'dur-bad'
         card = (
             '<div class="' + card_class + '" id="c-' + cid + '" data-id="' + cid + '">'
@@ -211,9 +290,11 @@ def generate_html(clips, audios):
             '<div class="card-body">'
             '<div class="card-header">'
             '<span class="clip-id">' + cid[:25] + '</span>'
+            + ('<span class="mood-badge mood-' + c['mood'] + '">' + c['mood'] + ' ' + str(c['intensidad']) + '/10</span>' if c.get('categorizado') else '') +
             '</div>'
-            '<div class="desc">' + desc_safe[:100] + '</div>'
+            '<div class="desc">' + desc_safe + '</div>'
             '<div class="tags">' + tags_html + '</div>'
+            + ia_section
             + (('<div class="src-url"><a href="' + url_safe + '" target="_blank">YouTube link</a> <button class="btn-redownload" onclick="copyUrl(\'' + url_safe + '\')">Copiar URL</button></div>') if url_safe else '') +
             '<details><summary>Editar (trim / audio)</summary>'
             '<div class="edit-section">'
@@ -272,7 +353,7 @@ def generate_html(clips, audios):
     html_parts.append('.card-body{padding:10px}')
     html_parts.append('.card-header{display:flex;align-items:center;gap:8px;margin-bottom:4px}')
     html_parts.append('.clip-id{font-family:monospace;font-size:0.65em;color:#aaa}')
-    html_parts.append('.desc{font-size:0.8em;color:#ccc;margin-bottom:5px;line-height:1.3}')
+    html_parts.append('.desc{font-size:0.78em;color:#ccc;margin-bottom:5px;line-height:1.4;max-height:80px;overflow-y:auto}')
     html_parts.append('.tags{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px}')
     html_parts.append('.tag{font-size:0.65em;padding:2px 6px;background:#16213e;border-radius:10px;color:#00d4aa}')
     html_parts.append('.tag.empty{color:#666}')
@@ -290,6 +371,20 @@ def generate_html(clips, audios):
     html_parts.append('.notes{width:100%;height:35px;padding:5px;border:1px solid #333;border-radius:5px;background:#0a0a15;color:#eee;font-size:0.8em;resize:vertical;margin-top:5px}')
     html_parts.append('#audio-player{position:fixed;bottom:20px;right:20px;background:#1a1a2e;padding:15px;border-radius:10px;border:1px solid #333;display:none;z-index:100}')
     html_parts.append('#audio-player .close-btn{position:absolute;top:5px;right:8px;cursor:pointer;color:#f44336;font-size:1.2em}')
+    html_parts.append('.ia-section{margin-top:6px;padding:6px 8px;background:#0a0a15;border-radius:6px;border:1px solid #1a2a3a;font-size:0.72em;line-height:1.5}')
+    html_parts.append('.ia-row{margin-bottom:2px;color:#bbb}')
+    html_parts.append('.ia-row b{color:#00d4aa}')
+    html_parts.append('.ia-warn{color:#ff9800}')
+    html_parts.append('.ia-suggest{color:#2196F3;font-style:italic}')
+    html_parts.append('.mood-badge{padding:2px 8px;border-radius:10px;font-size:0.7em;font-weight:bold;margin-left:6px}')
+    html_parts.append('.mood-epico{background:#9C27B0;color:white}')
+    html_parts.append('.mood-chill{background:#4CAF50;color:white}')
+    html_parts.append('.mood-caotico{background:#f44336;color:white}')
+    html_parts.append('.mood-dramatico{background:#FF5722;color:white}')
+    html_parts.append('.mood-comico{background:#FFC107;color:#000}')
+    html_parts.append('.mood-tenso{background:#795548;color:white}')
+    html_parts.append('.mood-nostalgico{background:#607D8B;color:white}')
+    html_parts.append('.mood-energetico{background:#FF9800;color:white}')
     html_parts.append('.dur-ok{background:rgba(76,175,80,0.8)}')
     html_parts.append('.dur-warn{background:rgba(255,152,0,0.8)}')
     html_parts.append('.dur-bad{background:rgba(244,67,54,0.8)}')
@@ -588,6 +683,7 @@ def main():
     parser = argparse.ArgumentParser(description="Catalogo Visual de Clips")
     parser.add_argument('--apply', action='store_true', help="Aplicar decisiones del JSON")
     parser.add_argument('--pendientes', action='store_true', help="Solo clips sin aprobar")
+    parser.add_argument('--ia', action='store_true', help="Solo clips categorizados por IA (muestra analisis completo)")
     parser.add_argument('--generar-thumbs', action='store_true', help="Regenerar thumbnails")
     parser.add_argument('--results-path', type=str, default=None)
     args = parser.parse_args()
@@ -613,7 +709,7 @@ def main():
         log.info("Done.")
         return
     
-    clips = get_all_clips(only_pending=args.pendientes)
+    clips = get_all_clips(only_pending=args.pendientes, only_ia=args.ia)
     audios = get_available_audios()
     
     if not clips:
