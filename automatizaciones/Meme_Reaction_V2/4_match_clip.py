@@ -265,6 +265,7 @@ def match_meme_with_clips(meme, clips, api_key):
 def save_matches(shortcode, match_result, clips_lookup):
     """Guarda los matches en SQLite."""
     db = get_db()
+    log = get_logger()
     
     # Delete previous matches for this meme
     db.execute("DELETE FROM matches WHERE shortcode = ?", (shortcode,))
@@ -273,13 +274,32 @@ def save_matches(shortcode, match_result, clips_lookup):
     youtube_sugs = match_result.get('youtube_sugerencias', [])
     sin_caption = match_result.get('sin_caption_viable', False)
     
+    # Get valid clip IDs from DB
+    valid_clips = set(row[0] for row in db.execute("SELECT id FROM clips").fetchall())
+    
     best_score = 0
+    inserted = 0
     
     for i, m in enumerate(matches):
-        clip_id = m.get('clip_id', '')
+        clip_id = m.get('clip_id', '').strip()
         score = m.get('compatibilidad', 0)
         razon = m.get('razon', '')
         captions = json.dumps(m.get('captions', []), ensure_ascii=False)
+        
+        # Validate clip_id exists (GPT sometimes modifies IDs slightly)
+        if clip_id not in valid_clips:
+            # Try fuzzy match (find closest)
+            matched_id = None
+            for vid in valid_clips:
+                if clip_id in vid or vid in clip_id:
+                    matched_id = vid
+                    break
+            if matched_id:
+                log.warning(f"    Clip ID corregido: {clip_id[:30]} -> {matched_id[:30]}")
+                clip_id = matched_id
+            else:
+                log.warning(f"    Clip ID invalido (skip): {clip_id[:40]}")
+                continue
         
         if score > best_score:
             best_score = score
@@ -291,11 +311,12 @@ def save_matches(shortcode, match_result, clips_lookup):
         """, (
             shortcode, clip_id, score,
             m.get('captions', [''])[0] if m.get('captions') else '',
-            i + 1,
+            inserted + 1,
             razon,
             captions,
-            json.dumps(youtube_sugs, ensure_ascii=False) if i == 0 else None
+            json.dumps(youtube_sugs, ensure_ascii=False) if inserted == 0 else None
         ))
+        inserted += 1
     
     # Update meme status based on best score
     if best_score >= 90:
