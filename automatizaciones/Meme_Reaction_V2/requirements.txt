@@ -1,0 +1,25 @@
+# =============================================================================
+# Meme Reaction V2 - Dependencias
+# =============================================================================
+
+# --- Infraestructura (Fase 1) ---
+python-dotenv>=1.0.0
+requests>=2.28.0
+
+# --- Scraping (Paso 1) ---
+selenium>=4.15.0
+webdriver-manager>=4.0.0
+
+# --- Descarga de Instagram (Paso 2) ---
+instaloader>=4.10.0
+
+# --- IA - Clasificación y Match (Pasos 3, 4) ---
+openai>=1.0.0
+
+# --- Generación de video (Paso 7) ---
+moviepy>=2.0.0
+Pillow>=9.2.0,<12
+numpy>=1.24.0
+
+# --- Telegram notificaciones ---
+# (usa requests, ya incluido arriba)
