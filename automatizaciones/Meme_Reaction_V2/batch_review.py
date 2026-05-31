@@ -61,7 +61,6 @@ def get_pending_memes(status_filter='pendiente_review', show_all=False):
     db = get_db()
     
     if show_all:
-        # Todo lo descargado que aún no está clasificado
         rows = db.execute("""
             SELECT * FROM memes 
             WHERE status IN ('pendiente_review', 'listo_clasificar')
@@ -110,7 +109,6 @@ def generate_html(memes):
     """
     Genera página HTML con grid de memes.
     Cada thumbnail tiene botones de aprobar/rechazar.
-    Al guardar, escribe un JSON con las decisiones.
     """
     
     # Generar cards HTML
@@ -124,16 +122,16 @@ def generate_html(memes):
             <img src="{b64}" alt="{meme['shortcode']}" onclick="toggleZoom(this)">
             <div class="info">
                 <span class="shortcode">{meme['shortcode'][:11]}</span>
-                <span class="meta">{meme['source_type']} | {likes_str} \u2764\ufe0f | @{meme['source_profile']}</span>
+                <span class="meta">{meme['source_type']} | {likes_str} likes | @{meme['source_profile']}</span>
             </div>
             <div class="buttons">
-                <button class="btn-approve" onclick="approve('{meme['shortcode']}')">\u2705</button>
-                <button class="btn-reject" onclick="reject('{meme['shortcode']}')">\u274c</button>
+                <button class="btn-approve" onclick="approve('{meme['shortcode']}')">&#x2705;</button>
+                <button class="btn-reject" onclick="reject('{meme['shortcode']}')">&#x274C;</button>
             </div>
         </div>
         """
     
-    # Página completa
+    # Página completa (usando HTML entities para emojis)
     html = f"""<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -246,20 +244,20 @@ def generate_html(memes):
 </head>
 <body>
     <div class="header">
-        <h1>\ud83d\uddbc\ufe0f Batch Review - Meme Reaction V2</h1>
+        <h1>&#x1F5BC; Batch Review - Meme Reaction V2</h1>
         <div class="stats">
             <span>Total: {len(memes)}</span>
-            <span id="stat-approved">\u2705 0</span>
-            <span id="stat-rejected">\u274c 0</span>
-            <span id="stat-pending">\u23f3 {len(memes)}</span>
+            <span id="stat-approved">&#x2705; 0</span>
+            <span id="stat-rejected">&#x274C; 0</span>
+            <span id="stat-pending">&#x23F3; {len(memes)}</span>
         </div>
     </div>
     
     <div class="toolbar">
-        <button class="btn-approve-all" onclick="approveAll()">\u2705 Aprobar Todos</button>
-        <button class="btn-reject-all" onclick="rejectAll()">\u274c Rechazar Todos</button>
-        <button class="btn-reset" onclick="resetAll()">\ud83d\udd04 Reset</button>
-        <button class="btn-save" onclick="saveResults()">\ud83d\udcbe GUARDAR DECISIONES</button>
+        <button class="btn-approve-all" onclick="approveAll()">&#x2705; Aprobar Todos</button>
+        <button class="btn-reject-all" onclick="rejectAll()">&#x274C; Rechazar Todos</button>
+        <button class="btn-reset" onclick="resetAll()">&#x1F504; Reset</button>
+        <button class="btn-save" onclick="saveResults()">&#x1F4BE; GUARDAR DECISIONES</button>
     </div>
     
     <div class="grid">
@@ -336,7 +334,7 @@ def generate_html(memes):
         function saveResults() {{
             const total = Object.keys(decisions).length;
             if (total === 0) {{
-                alert('No has tomado ninguna decisi\u00f3n a\u00fan.');
+                alert('No has tomado ninguna decision aun.');
                 return;
             }}
             
@@ -355,7 +353,7 @@ def generate_html(memes):
             a.click();
             URL.revokeObjectURL(url);
             
-            alert(`\u2705 Guardado: ${{total}} decisiones.\n\nAhora corre:\n  python batch_review.py --apply\n\nPara aplicar los cambios a la DB.`);
+            alert('Guardado: ' + total + ' decisiones.\n\nAhora corre:\n  python batch_review.py --apply\n\nPara aplicar los cambios a la DB.');
         }}
         
         // Keyboard shortcuts
@@ -376,8 +374,8 @@ def generate_html(memes):
 def apply_results(results_path=None):
     """
     Lee review_results.json y actualiza SQLite.
-    - approved → status = 'listo_clasificar'
-    - rejected → status = 'rechazado'
+    - approved -> status = 'listo_clasificar'
+    - rejected -> status = 'rechazado'
     """
     log = get_logger()
     path = Path(results_path) if results_path else REVIEW_RESULTS
@@ -392,7 +390,7 @@ def apply_results(results_path=None):
         path = downloads_path
         log.info(f"Encontrado en Downloads: {path}")
     else:
-        log.error(f"No se encontró review_results.json")
+        log.error(f"No se encontro review_results.json")
         log.error(f"  Buscado en: {REVIEW_RESULTS}")
         log.error(f"  Buscado en: {downloads_path}")
         log.error(f"  Descarga el archivo desde el navegador primero.")
@@ -415,13 +413,13 @@ def apply_results(results_path=None):
             rejected += 1
     
     log.info(f"")
-    log.info(f"=" * 50)
+    log.info(f"" + "=" * 50)
     log.info(f"   BATCH REVIEW APLICADO")
-    log.info(f"=" * 50)
-    log.info(f"   Aprobados (\u2192 listo_clasificar): {approved}")
-    log.info(f"   Rechazados (\u2192 rechazado):       {rejected}")
+    log.info("=" * 50)
+    log.info(f"   Aprobados (-> listo_clasificar): {approved}")
+    log.info(f"   Rechazados (-> rechazado):       {rejected}")
     log.info(f"   Total decisiones:                {len(decisions)}")
-    log.info(f"=" * 50)
+    log.info("=" * 50)
     
     # Limpiar JSON después de aplicar
     if path.exists():
@@ -442,7 +440,7 @@ def main():
     parser.add_argument('--apply', action='store_true',
                         help="Solo aplica review_results.json sin generar HTML")
     parser.add_argument('--results-path', type=str, default=None,
-                        help="Path específico al JSON de resultados")
+                        help="Path especifico al JSON de resultados")
     args = parser.parse_args()
 
     # Setup
@@ -485,7 +483,7 @@ def main():
     print(f"   2. Click 'GUARDAR DECISIONES' (descarga JSON)")
     print(f"   3. Corre: python batch_review.py --apply")
     print(f"")
-    print(f"   Eso actualizar\u00e1 SQLite y los aprobados pasar\u00e1n")
+    print(f"   Eso actualizara SQLite y los aprobados pasaran")
     print(f"   a 'listo_clasificar' para el paso 3 (IA).")
     print("=" * 60)
 
