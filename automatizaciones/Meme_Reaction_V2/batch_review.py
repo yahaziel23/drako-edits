@@ -3,15 +3,20 @@
 """
 Meme Reaction V2 - Batch Review (Grid Visual HTML)
 
-Genera una pagina HTML con grid de thumbnails para aprobar/rechazar
+Genera una pagina HTML con grid de thumbnails para aprobar/rechazar/redescargar
 memes rapidamente.
 
 Flujo:
 1. python batch_review.py           -> genera HTML + abre en navegador (servidor local)
-2. Aprueba/rechaza en el browser
+2. Aprueba/rechaza/redownload en el browser
 3. Click 'GUARDAR' -> descarga review_results.json
 4. Ctrl+C en terminal
 5. python batch_review.py --apply   -> lee JSON, actualiza SQLite
+
+Acciones:
+- SI (aprobar) -> status = 'listo_clasificar'
+- NO (rechazar) -> status = 'rechazado'
+- RE (redescargar) -> status = 'por_descargar' + borra imagen (se descarga fresca)
 
 Uso:
     python batch_review.py                    # Solo pendiente_review (frames)
@@ -70,7 +75,6 @@ def get_pending_memes(status_filter='pendiente_review', show_all=False):
 
 
 def generate_html(memes):
-    # Build cards with inline onclick (simplest possible JS)
     cards = []
     for m in memes:
         sc = m['shortcode']
@@ -84,6 +88,7 @@ def generate_html(memes):
             '</div>'
             '<div class="btns">'
             '<button class="ba" onclick="ap(\'' + sc + '\')">SI</button>'
+            '<button class="bre" onclick="re(\'' + sc + '\')">RE</button>'
             '<button class="br" onclick="rj(\'' + sc + '\')">NO</button>'
             '</div>'
             '</div>'
@@ -93,7 +98,6 @@ def generate_html(memes):
     cards_html = '\n'.join(cards)
     total = str(len(memes))
     
-    # Build full HTML (no f-strings, no braces conflicts)
     html_parts = []
     html_parts.append('<!DOCTYPE html>')
     html_parts.append('<html><head><meta charset="UTF-8">')
@@ -103,26 +107,30 @@ def generate_html(memes):
     html_parts.append('body{font-family:system-ui,sans-serif;background:#1a1a2e;color:#eee;padding:20px}')
     html_parts.append('.hdr{text-align:center;margin-bottom:20px;padding:15px;background:#16213e;border-radius:10px}')
     html_parts.append('.hdr h1{font-size:1.4em;margin-bottom:8px}')
-    html_parts.append('.stats{display:flex;justify-content:center;gap:15px;font-size:0.9em}')
+    html_parts.append('.stats{display:flex;justify-content:center;gap:12px;font-size:0.85em;flex-wrap:wrap}')
     html_parts.append('.stats span{padding:4px 12px;border-radius:15px;background:#0f3460}')
     html_parts.append('.tb{display:flex;justify-content:center;gap:10px;margin-bottom:20px;flex-wrap:wrap}')
     html_parts.append('.tb button{padding:10px 20px;border:none;border-radius:8px;cursor:pointer;font-size:0.95em;font-weight:bold}')
     html_parts.append('.sv{background:#00d4aa;color:#000}')
     html_parts.append('.aa{background:#4CAF50;color:white}')
     html_parts.append('.ra{background:#f44336;color:white}')
+    html_parts.append('.rea{background:#ff9800;color:white}')
     html_parts.append('.rs{background:#666;color:white}')
     html_parts.append('.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}')
     html_parts.append('.card{background:#16213e;border-radius:8px;overflow:hidden;border:3px solid transparent;transition:all 0.2s}')
     html_parts.append('.card.approved{border-color:#4CAF50;opacity:0.7}')
     html_parts.append('.card.rejected{border-color:#f44336;opacity:0.4}')
+    html_parts.append('.card.redownload{border-color:#ff9800;opacity:0.7}')
     html_parts.append('.card img{width:100%;height:180px;object-fit:cover;display:block;cursor:pointer}')
     html_parts.append('.info{padding:6px 8px}')
     html_parts.append('.sc{font-size:0.7em;color:#aaa;font-family:monospace;display:block}')
     html_parts.append('.mt{font-size:0.65em;color:#777}')
     html_parts.append('.btns{display:flex}')
-    html_parts.append('.btns button{flex:1;padding:12px;border:none;cursor:pointer;font-size:1.1em;font-weight:bold}')
+    html_parts.append('.btns button{flex:1;padding:12px;border:none;cursor:pointer;font-size:1em;font-weight:bold}')
     html_parts.append('.ba{background:#1b4332;color:#4CAF50}')
     html_parts.append('.ba:hover{background:#2d6a4f}')
+    html_parts.append('.bre{background:#3d2800;color:#ff9800}')
+    html_parts.append('.bre:hover{background:#5c3d00}')
     html_parts.append('.br{background:#3d0000;color:#f44336}')
     html_parts.append('.br:hover{background:#660000}')
     html_parts.append('.zo{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.92);z-index:1000;justify-content:center;align-items:center;cursor:pointer}')
@@ -132,10 +140,12 @@ def generate_html(memes):
     html_parts.append('<div class="hdr"><h1>Batch Review - Meme Reaction V2</h1>')
     html_parts.append('<div class="stats"><span>Total: ' + total + '</span>')
     html_parts.append('<span id="sa">Aprobados: 0</span>')
+    html_parts.append('<span id="sre">Redescargar: 0</span>')
     html_parts.append('<span id="sr">Rechazados: 0</span>')
     html_parts.append('<span id="sp">Pendientes: ' + total + '</span></div></div>')
     html_parts.append('<div class="tb">')
     html_parts.append('<button class="aa" onclick="approveAll()">Aprobar Todos</button>')
+    html_parts.append('<button class="rea" onclick="redownloadAll()">Redescargar Todos</button>')
     html_parts.append('<button class="ra" onclick="rejectAll()">Rechazar Todos</button>')
     html_parts.append('<button class="rs" onclick="resetAll()">Reset</button>')
     html_parts.append('<button class="sv" onclick="saveResults()">GUARDAR DECISIONES</button>')
@@ -149,15 +159,18 @@ def generate_html(memes):
     html_parts.append('var D={};')
     html_parts.append('function ap(sc){D[sc]="approved";document.getElementById("c-"+sc).className="card approved";upd();}')
     html_parts.append('function rj(sc){D[sc]="rejected";document.getElementById("c-"+sc).className="card rejected";upd();}')
+    html_parts.append('function re(sc){D[sc]="redownload";document.getElementById("c-"+sc).className="card redownload";upd();}')
     html_parts.append('function zoomIn(src){document.getElementById("zi").src=src;document.getElementById("zo").classList.add("active");}')
     html_parts.append('function upd(){')
-    html_parts.append('var a=0,r=0;for(var k in D){if(D[k]==="approved")a++;if(D[k]==="rejected")r++;}')
+    html_parts.append('var a=0,r=0,rd=0;for(var k in D){if(D[k]==="approved")a++;if(D[k]==="rejected")r++;if(D[k]==="redownload")rd++;}')
     html_parts.append('var t=document.querySelectorAll(".card").length;')
     html_parts.append('document.getElementById("sa").textContent="Aprobados: "+a;')
     html_parts.append('document.getElementById("sr").textContent="Rechazados: "+r;')
-    html_parts.append('document.getElementById("sp").textContent="Pendientes: "+(t-a-r);}')
+    html_parts.append('document.getElementById("sre").textContent="Redescargar: "+rd;')
+    html_parts.append('document.getElementById("sp").textContent="Pendientes: "+(t-a-r-rd);}')
     html_parts.append('function approveAll(){document.querySelectorAll(".card").forEach(function(c){var sc=c.id.slice(2);if(!D[sc])ap(sc);});}')
     html_parts.append('function rejectAll(){document.querySelectorAll(".card").forEach(function(c){var sc=c.id.slice(2);if(!D[sc])rj(sc);});}')
+    html_parts.append('function redownloadAll(){document.querySelectorAll(".card").forEach(function(c){var sc=c.id.slice(2);if(!D[sc])re(sc);});}')
     html_parts.append('function resetAll(){D={};document.querySelectorAll(".card").forEach(function(c){c.className="card";});upd();}')
     html_parts.append('function saveResults(){')
     html_parts.append('var t=Object.keys(D).length;if(t===0){alert("No has tomado ninguna decision.");return;}')
@@ -204,8 +217,11 @@ def apply_results(results_path=None):
         log.warning("El JSON no tiene decisiones.")
         return
     
+    db = get_db()
     approved = 0
     rejected = 0
+    redownloaded = 0
+    
     for shortcode, decision in decisions.items():
         if decision == 'approved':
             update_meme_status(shortcode, 'listo_clasificar')
@@ -213,6 +229,20 @@ def apply_results(results_path=None):
         elif decision == 'rejected':
             update_meme_status(shortcode, 'rechazado')
             rejected += 1
+        elif decision == 'redownload':
+            # Volver a por_descargar + limpiar imagen + reset preprocessed
+            update_meme_status(shortcode, 'por_descargar')
+            db.execute(
+                "UPDATE memes SET preprocessed = 0, image_path = NULL, image_hash = NULL WHERE shortcode = ?",
+                (shortcode,)
+            )
+            # Borrar la imagen corrupta/mal croppeada
+            img_path = MEMES_DIR / f"{shortcode}.jpg"
+            if img_path.exists():
+                img_path.unlink()
+            redownloaded += 1
+    
+    db.commit()
     
     log.info("")
     log.info("=" * 50)
@@ -220,8 +250,13 @@ def apply_results(results_path=None):
     log.info("=" * 50)
     log.info(f"   Aprobados (-> listo_clasificar): {approved}")
     log.info(f"   Rechazados (-> rechazado):       {rejected}")
+    log.info(f"   Redescargar (-> por_descargar):  {redownloaded}")
     log.info(f"   Total decisiones:                {len(decisions)}")
     log.info("=" * 50)
+    if redownloaded > 0:
+        log.info(f"   {redownloaded} imagenes borradas. Se descargaran frescas con:")
+        log.info(f"   python 2_download_memes.py --max {redownloaded + 5}")
+    log.info("")
     
     if path.exists():
         path.unlink()
@@ -269,7 +304,12 @@ def main():
     print("=" * 60)
     print(f"   {len(memes)} memes en el grid")
     print("")
-    print("   1. Aprueba/rechaza en el navegador")
+    print("   Acciones por meme:")
+    print("     SI  = aprobar (-> clasificacion IA)")
+    print("     RE  = redescargar (borra imagen, vuelve a cola)")
+    print("     NO  = rechazar (descartado)")
+    print("")
+    print("   1. Decide cada meme en el navegador")
     print("   2. Click 'GUARDAR DECISIONES'")
     print("   3. Ctrl+C aqui para parar el servidor")
     print("   4. python batch_review.py --apply")

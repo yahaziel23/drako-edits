@@ -9,6 +9,7 @@ Limpia bordes innecesarios y agrega marco apropiado segun el tipo de meme.
 Algoritmo:
 1. Auto-crop: recorta bordes uniformes desde las 4 esquinas hacia adentro
    hasta que cambia el color (tolerancia para JPEG artifacts).
+   IMPORTANTE: retrocede N pixeles despues del crop para no cortar texto/contenido.
 2. Detecta tipo de meme:
    - Tipo A (cuadro definido): despues del crop no hay bandas uniformes -> sin borde
    - Tipo B (texto en fondo solido + imagen abajo): detecta banda uniforme
@@ -21,6 +22,7 @@ Uso:
     python 2b_preprocess.py --force      # Re-procesa todas (incluso ya procesadas)
     python 2b_preprocess.py --border 25  # Cambia el padding del borde (default: 20px)
     python 2b_preprocess.py --tolerance 20  # Tolerancia de color (default: 15)
+    python 2b_preprocess.py --margin 8   # Pixeles de retroceso post-crop (default: 6)
     python 2b_preprocess.py --dry-run    # Muestra que haria sin modificar nada
 
 Dependencias: Pillow, numpy
@@ -48,7 +50,6 @@ MEMES_DIR = SCRIPT_DIR / "memes_descargados"
 def ensure_preprocessed_column():
     """Agrega columna 'preprocessed' a memes si no existe."""
     db = get_db()
-    # Verificar si la columna existe
     columns = [row[1] for row in db.execute("PRAGMA table_info(memes)").fetchall()]
     if 'preprocessed' not in columns:
         db.execute("ALTER TABLE memes ADD COLUMN preprocessed INTEGER DEFAULT 0")
@@ -65,7 +66,7 @@ def get_reference_color(img_array, corner='top_left', patch_size=5):
     Retorna array RGB.
     """
     h, w = img_array.shape[:2]
-    ps = min(patch_size, h // 4, w // 4)  # No exceder imagen
+    ps = min(patch_size, h // 4, w // 4)
     
     if corner == 'top_left':
         patch = img_array[:ps, :ps]
@@ -84,14 +85,12 @@ def get_reference_color(img_array, corner='top_left', patch_size=5):
 def get_consensus_color(img_array, patch_size=5, tolerance=15):
     """
     Determina el color de borde consensuado entre las 4 esquinas.
-    Si al menos 3 esquinas son similares, ese es el color de borde.
-    Si no hay consenso, usa el promedio de las que coinciden.
+    Si al menos 2 esquinas son similares, ese es el color de borde.
     Retorna (color_rgb, tiene_borde_uniforme).
     """
     corners = ['top_left', 'top_right', 'bottom_left', 'bottom_right']
     colors = [get_reference_color(img_array, c, patch_size) for c in corners]
     
-    # Buscar consenso: que esquinas son similares entre si
     groups = []
     used = [False] * 4
     
@@ -106,28 +105,27 @@ def get_consensus_color(img_array, patch_size=5, tolerance=15):
                 used[j] = True
         groups.append(group)
     
-    # La grupo mas grande es el consenso
     largest_group = max(groups, key=len)
     
     if len(largest_group) >= 2:
         consensus_color = np.mean([colors[i] for i in largest_group], axis=0)
         return consensus_color, True
     else:
-        # No hay consenso - probablemente no hay borde uniforme
         return colors[0], False
 
 
-def auto_crop(img_array, tolerance=15, min_content_ratio=0.3):
+def auto_crop(img_array, tolerance=15, min_content_ratio=0.3, margin=6):
     """
     Recorta bordes uniformes desde las 4 direcciones.
     
-    Para cada direccion, avanza hacia adentro mientras las filas/columnas
-    sean similares al color de referencia (esquina).
+    CLAVE: despues de detectar donde cambia el color, RETROCEDE 'margin' pixeles
+    para no cortar texto o contenido que esta sobre el mismo fondo.
     
     Args:
         img_array: numpy array (H, W, 3)
         tolerance: diferencia maxima en RGB para considerar "mismo color"
         min_content_ratio: minimo de contenido que debe quedar (evita crop excesivo)
+        margin: pixeles de retroceso DESPUES del crop (safety buffer para texto)
     
     Returns:
         (top, bottom, left, right) - indices de crop
@@ -139,7 +137,6 @@ def auto_crop(img_array, tolerance=15, min_content_ratio=0.3):
     ref_color, has_border = get_consensus_color(img_array, tolerance=tolerance)
     
     if not has_border:
-        # No hay borde uniforme claro, no cropear
         return 0, h, 0, w
     
     # Crop desde arriba
@@ -173,6 +170,19 @@ def auto_crop(img_array, tolerance=15, min_content_ratio=0.3):
         if np.max(np.abs(col_mean - ref_color)) > tolerance:
             break
         right = col
+    
+    # === RETROCESO (margin) ===
+    # Despues de detectar el borde exacto, retrocede unos pixeles
+    # para no cortar texto/contenido que esta sobre el mismo fondo.
+    # Solo retrocede si efectivamente hizo crop (no retrocede mas alla del original)
+    if top > 0:
+        top = max(0, top - margin)
+    if bottom < h:
+        bottom = min(h, bottom + margin)
+    if left > 0:
+        left = max(0, left - margin)
+    if right < w:
+        right = min(w, right + margin)
     
     return top, bottom, left, right
 
@@ -210,7 +220,6 @@ def detect_meme_type(img_array, band_threshold=0.12, uniformity_tolerance=20):
     is_light = np.mean(first_row_color) > 200
     
     if not (is_dark or is_light):
-        # El top no es blanco ni negro, probablemente es imagen directa
         return 'A', {}
     
     # Buscar hasta donde llega la banda uniforme
@@ -221,11 +230,9 @@ def detect_meme_type(img_array, band_threshold=0.12, uniformity_tolerance=20):
             break
         band_end = row + 1
     
-    # La banda debe ser significativa (>12% de la altura) pero no toda la imagen
     band_ratio = band_end / h
     
     if band_ratio >= band_threshold and band_ratio < 0.85:
-        # Es tipo B: tiene texto en fondo solido arriba
         band_color = tuple(int(c) for c in first_row_color)
         return 'B', {
             'band_color': band_color,
@@ -244,14 +251,6 @@ def detect_meme_type(img_array, band_threshold=0.12, uniformity_tolerance=20):
 def add_border(img, border_size, color):
     """
     Agrega un borde uniforme alrededor de la imagen.
-    
-    Args:
-        img: PIL Image
-        border_size: pixeles de borde en cada lado
-        color: tuple (R, G, B)
-    
-    Returns:
-        PIL Image con borde
     """
     w, h = img.size
     new_w = w + (border_size * 2)
@@ -267,18 +266,19 @@ def add_border(img, border_size, color):
 # PROCESAR UNA IMAGEN
 # =============================================================================
 
-def process_image(image_path, tolerance=15, border_size=20, dry_run=False):
+def process_image(image_path, tolerance=15, border_size=20, margin=6, dry_run=False):
     """
     Pipeline completo de preprocesamiento para una imagen.
     
-    1. Auto-crop (eliminar bordes uniformes)
+    1. Auto-crop (eliminar bordes uniformes, con margin de seguridad)
     2. Detectar tipo de meme
     3. Agregar borde si es necesario
     
     Args:
         image_path: Path al archivo .jpg
         tolerance: tolerancia de color para crop (default 15)
-        border_size: tamano del borde a agregar (default 20px)
+        border_size: tamano del borde a agregar para Tipo B (default 20px)
+        margin: pixeles de retroceso post-crop (default 6)
         dry_run: si True, no modifica el archivo
     
     Returns:
@@ -295,8 +295,8 @@ def process_image(image_path, tolerance=15, border_size=20, dry_run=False):
     original_size = img.size  # (w, h)
     img_array = np.array(img)
     
-    # --- Paso 1: Auto-crop ---
-    top, bottom, left, right = auto_crop(img_array, tolerance=tolerance)
+    # --- Paso 1: Auto-crop (con margin de seguridad) ---
+    top, bottom, left, right = auto_crop(img_array, tolerance=tolerance, margin=margin)
     
     cropped = (top > 0 or bottom < img_array.shape[0] or 
                left > 0 or right < img_array.shape[1])
@@ -313,6 +313,7 @@ def process_image(image_path, tolerance=15, border_size=20, dry_run=False):
             'left': left,
             'right': original_size[0] - right,
         },
+        'margin_applied': margin,
         'original_size': original_size,
         'cropped_size': img.size,
     }
@@ -354,13 +355,7 @@ def process_image(image_path, tolerance=15, border_size=20, dry_run=False):
 # =============================================================================
 
 def get_memes_to_process(force=False):
-    """
-    Obtiene memes que necesitan preprocesamiento.
-    Default: status en ('pendiente_review', 'listo_clasificar') AND preprocessed=0
-    Con force: ignora el flag preprocessed.
-    """
     db = get_db()
-    
     if force:
         rows = db.execute("""
             SELECT shortcode, image_path FROM memes
@@ -376,16 +371,10 @@ def get_memes_to_process(force=False):
             AND image_path IS NOT NULL
             ORDER BY likes DESC
         """).fetchall()
-    
     return rows
 
 
 def reset_approved():
-    """
-    Mueve memes de 'listo_clasificar' a 'pendiente_review'
-    y marca preprocessed=0 para re-procesarlos.
-    Retorna cantidad afectada.
-    """
     db = get_db()
     cursor = db.execute("""
         UPDATE memes 
@@ -410,6 +399,8 @@ def main():
                         help="Tamano del borde en pixeles (default: 20)")
     parser.add_argument('--tolerance', type=int, default=15,
                         help="Tolerancia de color para crop (default: 15)")
+    parser.add_argument('--margin', type=int, default=6,
+                        help="Pixeles de retroceso post-crop para no cortar texto (default: 6)")
     parser.add_argument('--dry-run', action='store_true',
                         help="Muestra que haria sin modificar nada")
     args = parser.parse_args()
@@ -436,7 +427,7 @@ def main():
         return
 
     log.info(f"Procesando {len(memes)} imagenes...")
-    log.info(f"  Tolerancia: {args.tolerance}, Borde: {args.border}px")
+    log.info(f"  Tolerancia: {args.tolerance}, Borde: {args.border}px, Margin: {args.margin}px")
     if args.dry_run:
         log.info("  [DRY RUN - no se modifican archivos]")
     print("")
@@ -458,6 +449,7 @@ def main():
             img_path,
             tolerance=args.tolerance,
             border_size=args.border,
+            margin=args.margin,
             dry_run=args.dry_run
         )
         
@@ -505,6 +497,7 @@ def main():
     print(f"   Tipo A (sin borde):   {stats['type_a']}")
     print(f"   Tipo B (con borde):   {stats['type_b']}")
     print(f"   Errores:              {stats['errors']}")
+    print(f"   Margin (retroceso):   {args.margin}px")
     if args.dry_run:
         print("   [DRY RUN - nada fue modificado]")
     print("=" * 60)
