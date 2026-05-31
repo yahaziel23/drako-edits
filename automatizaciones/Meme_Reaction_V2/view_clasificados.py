@@ -313,9 +313,9 @@ def apply_results(results_path=None):
     for shortcode, note in feedback.items():
         if note.strip():
             db.execute("""
-                INSERT INTO user_feedback (shortcode, step, feedback_text, timestamp)
-                VALUES (?, 'classify_qa', ?, ?)
-            """, (shortcode, note, data.get('timestamp', '')))
+                INSERT INTO user_feedback (shortcode, step, user_said, decision)
+                VALUES (?, 'classify_qa', ?, 'feedback')
+            """, (shortcode, note))
             feedback_count += 1
     
     db.commit()
