@@ -268,10 +268,10 @@ def generate_html(memes_data):
     # Header
     html_parts.append('<div class="hdr"><h1>Match Meme \u2194 Clip</h1>')
     html_parts.append('<div class="stats">')
-    html_parts.append('<span class="stat-pill pill-green">\u2705 ' + str(auto_count) + ' auto-aceptados</span>')
-    html_parts.append('<span class="stat-pill pill-orange">\u270b ' + str(review_count) + ' por revisar</span>')
+    html_parts.append('<span class="stat-pill pill-green">&#9989; ' + str(auto_count) + ' auto-aceptados</span>')
+    html_parts.append('<span class="stat-pill pill-orange">&#9995; ' + str(review_count) + ' por revisar</span>')
     if no_match_count > 0:
-        html_parts.append('<span class="stat-pill pill-red">\u274c ' + str(no_match_count) + ' sin clip</span>')
+        html_parts.append('<span class="stat-pill pill-red">&#10060; ' + str(no_match_count) + ' sin clip</span>')
     html_parts.append('</div></div>')
     
     # Filters
@@ -287,9 +287,9 @@ def generate_html(memes_data):
     
     # Toolbar
     html_parts.append('<div class="tb">')
-    html_parts.append('<button class="sv" onclick="saveDecisions()">\ud83d\udcbe GUARDAR DECISIONES</button>')
-    html_parts.append('<button onclick="acceptAllAuto()">\u2705 Confirmar todos los auto-aceptados</button>')
-    html_parts.append('<button onclick="collapseDecided()">\ud83d\udc41 Ocultar decididos</button>')
+    html_parts.append('<button class="sv" onclick="saveDecisions()">&#128190; GUARDAR DECISIONES</button>')
+    html_parts.append('<button onclick="acceptAllAuto()">&#9989; Confirmar todos los auto-aceptados</button>')
+    html_parts.append('<button onclick="collapseDecided()">&#128065; Ocultar decididos</button>')
     html_parts.append('</div>')
     
     # Meme cards
@@ -317,7 +317,7 @@ def generate_html(memes_data):
                 cap_safe = cap.replace("'", "\\'")
                 captions_btns += '<button class="cap-btn" onclick="pickCaption(\'' + sc + '\',\'' + m['clip_id'] + '\',\'' + cap_safe + '\',this)">' + cap + '</button>'
             captions_btns += '<button class="cap-btn cap-none" onclick="pickCaption(\'' + sc + '\',\'' + m['clip_id'] + '\',\'\',this)">Sin caption</button>'
-            captions_btns += '<button class="cap-btn cap-custom" onclick="showCustomCaption(\'' + sc + '\',\'' + m['clip_id'] + '\',this)">\u270f\ufe0f Escribir...</button>'
+            captions_btns += '<button class="cap-btn cap-custom" onclick="showCustomCaption(\'' + sc + '\',\'' + m['clip_id'] + '\',this)">&#9999;&#65039; Escribir...</button>'
             
             video_tag = ''
             if m['clip_file']:
@@ -338,14 +338,14 @@ def generate_html(memes_data):
             options_html += '<input class="custom-cap-input" placeholder="Escribe tu caption..." maxlength="50">'
             options_html += '<button class="custom-cap-ok" onclick="submitCustomCaption(\'' + sc + '\',\'' + m['clip_id'] + '\',this)">OK</button>'
             options_html += '</div>'
-            options_html += '<button class="btn-select" onclick="selectMatch(\'' + sc + '\',\'' + m['clip_id'] + '\')">\u2705 ELEGIR ESTE CLIP</button>'
+            options_html += '<button class="btn-select" onclick="selectMatch(\'' + sc + '\',\'' + m['clip_id'] + '\')">&#9989; ELEGIR ESTE CLIP</button>'
             options_html += '</div>'
         
         # YouTube suggestions
         yt_html = ''
         if meme['youtube_sugs']:
             yt_items = ''.join(['<li><a href="https://www.youtube.com/results?search_query=' + s.replace(' ', '+') + '" target="_blank">' + s + '</a></li>' for s in meme['youtube_sugs']])
-            yt_html = '<div class="yt-section"><b>\ud83d\udd0d Buscar clips en YouTube:</b><ul>' + yt_items + '</ul></div>'
+            yt_html = '<div class="yt-section"><b>&#128269; Buscar clips en YouTube:</b><ul>' + yt_items + '</ul></div>'
         
         # Image
         img_html = '<div class="no-img">Sin imagen</div>'
@@ -370,8 +370,8 @@ def generate_html(memes_data):
         html_parts.append('<div class="meme-desc">' + meme['descripcion'][:200] + '</div>')
         html_parts.append(ideas_html)
         html_parts.append('<div class="meme-actions">')
-        html_parts.append('<button class="btn-skip" onclick="skipMeme(\'' + sc + '\')">\u23ed SKIP</button>')
-        html_parts.append('<button class="btn-regen" onclick="alert(\'Corre: python 4_match_clip.py --shortcode ' + sc + ' --force\')">\ud83d\udd04 Re-matchear</button>')
+        html_parts.append('<button class="btn-skip" onclick="skipMeme(\'' + sc + '\')">&#9197; SKIP</button>')
+        html_parts.append('<button class="btn-regen" onclick="alert(\'Corre: python 4_match_clip.py --shortcode ' + sc + ' --force\')">&#128260; Re-matchear</button>')
         html_parts.append('</div>')
         html_parts.append('</div>')
         html_parts.append('<div class="meme-right">')
