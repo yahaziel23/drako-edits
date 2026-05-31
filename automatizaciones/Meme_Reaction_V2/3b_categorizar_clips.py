@@ -1,27 +1,36 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Meme Reaction V2 - Categorizar Clips con IA (Gemini 1.5 Flash)
+Meme Reaction V2 - Categorizar Clips con IA
 
-Analiza clips de video+audio aprobados y genera:
+Soporta 2 motores:
+  - OpenAI GPT-4o (default): Extrae 5 frames y los analiza como imagenes. ~$0.035/clip
+  - Gemini 2.0 Flash: Analiza video+audio completo. ~$0.001/clip (requiere billing Google)
+
+Genera por clip:
   - Descripcion detallada (que pasa visualmente)
   - Categorias (misma taxonomia de 55 tags del proyecto)
   - Mood/energia del clip
-  - Analisis de audio (musica, efectos, silencio, beat drops...)
+  - Analisis de audio (inferido del contexto visual con OpenAI, directo con Gemini)
   - Recomendaciones (recortar, cambiar audio, tipo de meme ideal)
   - Intensidad (1-10)
 
 Requisitos:
-    pip install google-genai python-dotenv
-    GOOGLE_API_KEY en .env
+    pip install openai python-dotenv     # Para modo OpenAI (default)
+    pip install google-genai             # Para modo Gemini (opcional)
+    OPENAI_API_KEY en .env               # Para modo OpenAI
+    GOOGLE_API_KEY en .env               # Para modo Gemini
 
 Uso:
-    python 3b_categorizar_clips.py              # Categoriza todos los aprobados sin categorizar
-    python 3b_categorizar_clips.py --force      # Re-categoriza incluso los ya categorizados
-    python 3b_categorizar_clips.py --id CLIP_ID # Categoriza un clip especifico
-    python 3b_categorizar_clips.py --dry-run    # Muestra que haria sin llamar a la API
+    python 3b_categorizar_clips.py                    # GPT-4o (default)
+    python 3b_categorizar_clips.py --model gemini     # Gemini (requiere billing)
+    python 3b_categorizar_clips.py --force            # Re-categoriza todos
+    python 3b_categorizar_clips.py --id CLIP_ID       # Solo un clip
+    python 3b_categorizar_clips.py --dry-run          # Preview sin gastar
 
-Costo estimado: ~$0.001 por clip (Gemini 1.5 Flash)
+Costo estimado (22 clips):
+    OpenAI: ~$0.70 total (~$0.035/clip, 5 frames x 85 tokens + texto)
+    Gemini: ~$0.02 total (~$0.001/clip, video completo + audio)
 """
 
 import sys
@@ -29,6 +38,7 @@ import os
 import json
 import argparse
 import time
+import subprocess
 from pathlib import Path
 from datetime import datetime
 
@@ -41,7 +51,7 @@ load_dotenv(SCRIPT_DIR / '.env')
 from utils.db import init_db, get_db
 from utils.config import load_config
 from utils.logger import setup_logger, get_logger
-from utils.retry import with_retry
+# from utils.retry import with_retry  # Custom retry logic inside analyze function
 
 CLIPS_DIR = SCRIPT_DIR / "clips"
 
@@ -186,29 +196,169 @@ def get_pending_clips(force=False, clip_id=None):
     return rows
 
 
-@with_retry(max_attempts=3, backoff_factor=2)
+def extract_frames(clip_path, num_frames=5):
+    """Extrae N frames equidistantes del video como JPG base64."""
+    import base64
+    import tempfile
+    
+    duration = get_video_duration(clip_path)
+    if not duration or duration < 1:
+        duration = 5.0
+    
+    frames = []
+    # Frames equidistantes (evitar frame 0 que suele ser negro)
+    timestamps = [duration * (i + 1) / (num_frames + 1) for i in range(num_frames)]
+    
+    for ts in timestamps:
+        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
+            tmp_path = tmp.name
+        
+        cmd = [
+            'ffmpeg', '-y', '-ss', f'{ts:.2f}',
+            '-i', str(clip_path),
+            '-vframes', '1', '-q:v', '4',
+            '-vf', 'scale=512:-2',
+            tmp_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        
+        if result.returncode == 0 and os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
+            with open(tmp_path, 'rb') as f:
+                b64 = base64.b64encode(f.read()).decode('utf-8')
+            frames.append({
+                'timestamp': round(ts, 1),
+                'base64': b64
+            })
+        
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+    
+    return frames
+
+
+def analyze_clip_with_openai(clip_path, api_key):
+    """Analiza clip usando GPT-4o con frames extraidos como imagenes.
+    
+    Extrae 5 frames equidistantes + envia como imagenes a GPT-4o.
+    No analiza audio directamente pero infiere contexto visual.
+    """
+    import re as _re
+    from openai import OpenAI
+    
+    log = get_logger()
+    client = OpenAI(api_key=api_key)
+    
+    # Step 1: Extract frames
+    log.info(f"    Extrayendo frames del video...")
+    frames = extract_frames(clip_path, num_frames=5)
+    
+    if not frames:
+        raise RuntimeError("No se pudieron extraer frames del video")
+    
+    log.info(f"    {len(frames)} frames extraidos. Analizando con GPT-4o...")
+    
+    # Step 2: Build message with frames
+    duration = get_video_duration(clip_path) or 0
+    
+    frame_descriptions = ", ".join([f"frame@{f['timestamp']}s" for f in frames])
+    
+    # Build content array with text + images
+    content_parts = [
+        {
+            "type": "text",
+            "text": (
+                f"Este clip dura {duration:.1f} segundos. "
+                f"Te muestro {len(frames)} frames equidistantes ({frame_descriptions}). "
+                f"Analiza el clip como si fuera un video de reaccion para TikTok/Reels."
+            )
+        }
+    ]
+    
+    for frame in frames:
+        content_parts.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{frame['base64']}",
+                "detail": "low"
+            }
+        })
+    
+    # Build prompt
+    prompt = CLIP_ANALYSIS_PROMPT.format(tags_by_group=get_tags_by_group())
+    
+    # Add note about audio limitation
+    prompt += """\n\nNOTA IMPORTANTE: No puedes escuchar el audio. Para audio_analisis:
+- tipo: inferir del contexto visual (ej: si es video musical = "musica", si hablan = "dialogo")
+- descripcion: describir lo que PROBABLEMENTE se escucha basado en el contexto visual
+- Los demas campos de audio: dar tu mejor estimacion basada en lo visual
+- sirve_como_audio_de_fondo: true si el clip parece tener musica/sonido ambiental util"""
+    
+    content_parts.append({
+        "type": "text",
+        "text": prompt
+    })
+    
+    # Step 3: Call GPT-4o with retry
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": content_parts}],
+                max_tokens=2000,
+                temperature=0.3,
+                response_format={"type": "json_object"}
+            )
+            
+            raw_text = response.choices[0].message.content.strip()
+            result = json.loads(raw_text)
+            
+            # Log token usage
+            usage = response.usage
+            log.info(f"    Tokens: {usage.prompt_tokens} in + {usage.completion_tokens} out = {usage.total_tokens}")
+            
+            return result
+            
+        except Exception as e:
+            if '429' in str(e) or 'rate' in str(e).lower():
+                wait = 20 * (attempt + 1)
+                log.warning(f"    Rate limit. Esperando {wait}s... ({attempt+1}/{max_retries})")
+                time.sleep(wait)
+            elif attempt < max_retries - 1:
+                log.warning(f"    Error (intento {attempt+1}): {str(e)[:100]}. Reintentando...")
+                time.sleep(3)
+            else:
+                raise
+
+
 def analyze_clip_with_gemini(clip_path, api_key):
-    """Envia un clip a Gemini 1.5 Flash y obtiene el analisis."""
+    """Envia un clip a Gemini 2.0 Flash y obtiene el analisis.
+    
+    Maneja rate limits respetando el delay sugerido por la API.
+    Separa upload de generacion para no re-subir en cada retry.
+    """
+    import re as _re
     from google import genai
     from google.genai import types
     
     client = genai.Client(api_key=api_key)
-    
-    # Upload the video file
     log = get_logger()
-    log.info(f"    Subiendo video a Gemini...")
     
+    # Step 1: Upload video (solo una vez)
+    log.info(f"    Subiendo video a Gemini...")
     video_file = client.files.upload(
         file=str(clip_path),
         config=types.UploadFileConfig(mime_type="video/mp4")
     )
     
     # Wait for processing
-    max_wait = 60
+    max_wait = 120
     waited = 0
     while video_file.state.name == "PROCESSING" and waited < max_wait:
-        time.sleep(2)
-        waited += 2
+        time.sleep(3)
+        waited += 3
         video_file = client.files.get(name=video_file.name)
     
     if video_file.state.name != "ACTIVE":
@@ -216,37 +366,67 @@ def analyze_clip_with_gemini(clip_path, api_key):
     
     log.info(f"    Video listo. Analizando con Flash...")
     
-    # Build prompt
+    # Step 2: Generate (con retry respetando rate limits)
     prompt = CLIP_ANALYSIS_PROMPT.format(tags_by_group=get_tags_by_group())
+    max_retries = 5
     
-    # Generate
-    response = client.models.generate_content(
-        model="gemini-2.0-flash",
-        contents=[video_file, prompt],
-        config=types.GenerateContentConfig(
-            temperature=0.3,
-            max_output_tokens=2000,
-        )
-    )
-    
-    raw_text = response.text.strip()
-    
-    # Clean up (remove markdown fences if present)
-    if raw_text.startswith('```'):
-        raw_text = raw_text.split('\n', 1)[1]
-        if raw_text.endswith('```'):
-            raw_text = raw_text[:-3].strip()
-    
-    # Parse JSON
-    result = json.loads(raw_text)
-    
-    # Cleanup: delete uploaded file
-    try:
-        client.files.delete(name=video_file.name)
-    except Exception:
-        pass
-    
-    return result
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=[video_file, prompt],
+                config=types.GenerateContentConfig(
+                    temperature=0.3,
+                    max_output_tokens=2000,
+                )
+            )
+            
+            raw_text = response.text.strip()
+            
+            # Clean up markdown fences
+            if raw_text.startswith('```'):
+                raw_text = raw_text.split('\n', 1)[1]
+                if raw_text.endswith('```'):
+                    raw_text = raw_text[:-3].strip()
+            
+            result = json.loads(raw_text)
+            
+            # Cleanup uploaded file
+            try:
+                client.files.delete(name=video_file.name)
+            except Exception:
+                pass
+            
+            return result
+            
+        except Exception as e:
+            error_str = str(e)
+            
+            if '429' in error_str or 'RESOURCE_EXHAUSTED' in error_str:
+                # Parse suggested retry delay from error
+                delay_match = _re.search(r'retry in ([\d.]+)s', error_str, _re.IGNORECASE)
+                if delay_match:
+                    wait_time = float(delay_match.group(1)) + 2  # +2s safety margin
+                else:
+                    wait_time = 30 * (attempt + 1)  # 30s, 60s, 90s...
+                
+                if attempt < max_retries - 1:
+                    log.warning(f"    Rate limit hit. Esperando {wait_time:.0f}s antes de reintentar ({attempt+1}/{max_retries})...")
+                    time.sleep(wait_time)
+                else:
+                    # Cleanup and raise
+                    try:
+                        client.files.delete(name=video_file.name)
+                    except Exception:
+                        pass
+                    raise RuntimeError(f"Rate limit persistente despues de {max_retries} intentos: {error_str[:200]}")
+            else:
+                # Non-rate-limit error: cleanup and raise immediately
+                try:
+                    client.files.delete(name=video_file.name)
+                except Exception:
+                    pass
+                raise
 
 
 def save_analysis(clip_id, analysis):
@@ -321,10 +501,12 @@ def print_analysis(clip_id, analysis):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Categorizar clips con Gemini 1.5 Flash")
+    parser = argparse.ArgumentParser(description="Categorizar clips con IA (Gemini o GPT-4o)")
     parser.add_argument('--force', action='store_true', help="Re-categorizar todos (incluso ya categorizados)")
     parser.add_argument('--id', type=str, default=None, help="Categorizar un clip especifico por ID")
     parser.add_argument('--dry-run', action='store_true', help="Solo mostrar que se haria")
+    parser.add_argument('--model', type=str, default='gemini', choices=['openai', 'gemini'],
+                        help="Motor de IA: 'gemini' (default, video+audio) o 'openai' (GPT-4o frames)")
     args = parser.parse_args()
     
     load_config()
@@ -332,12 +514,23 @@ def main():
     setup_logger('categorizar_clips')
     log = get_logger()
     
-    # Verify API key
-    api_key = os.getenv('GOOGLE_API_KEY')
-    if not api_key:
-        log.error("GOOGLE_API_KEY no encontrada en .env")
-        log.error("Obten una gratis en: https://aistudio.google.com/apikey")
-        sys.exit(1)
+    # Verify API key based on model
+    model_choice = args.model
+    
+    if model_choice == 'gemini':
+        api_key = os.getenv('GOOGLE_API_KEY')
+        if not api_key:
+            log.error("GOOGLE_API_KEY no encontrada en .env")
+            log.error("Obten una en: https://aistudio.google.com/apikey")
+            sys.exit(1)
+    else:  # openai
+        api_key = os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            log.error("OPENAI_API_KEY no encontrada en .env")
+            sys.exit(1)
+    
+    # Pre-load both keys (for potential fallback)
+    os.getenv('OPENAI_API_KEY')  # Just verify it exists for fallback
     
     ensure_clip_columns()
     
@@ -349,18 +542,21 @@ def main():
             log.info("Usa --force para re-categorizar los ya procesados.")
         return
     
+    cost_per_clip = 0.035 if model_choice == 'openai' else 0.001
+    model_name = "GPT-4o (frames)" if model_choice == 'openai' else "Gemini 2.0 Flash (video+audio)"
+    
     log.info(f"")
     log.info(f"{'='*55}")
-    log.info(f"   CATEGORIZAR CLIPS - Gemini 2.0 Flash")
+    log.info(f"   CATEGORIZAR CLIPS - {model_name}")
     log.info(f"{'='*55}")
     log.info(f"   Clips a procesar: {len(clips)}")
-    log.info(f"   Costo estimado:   ~${len(clips) * 0.001:.3f}")
-    log.info(f"   Modelo: gemini-2.0-flash (video+audio)")
+    log.info(f"   Costo estimado:   ~${len(clips) * cost_per_clip:.3f}")
+    log.info(f"   Modelo: {model_name}")
     log.info(f"{'='*55}")
     log.info(f"")
     
     if args.dry_run:
-        log.info("[DRY RUN] Clips que se procesarian:")
+        log.info(f"[DRY RUN] Clips que se procesarian ({model_choice}):")
         for clip in clips:
             path = CLIPS_DIR / clip['filename']
             exists = path.exists()
@@ -386,7 +582,10 @@ def main():
         start_time = time.time()
         
         try:
-            analysis = analyze_clip_with_gemini(clip_path, api_key)
+            if model_choice == 'gemini':
+                analysis = analyze_clip_with_gemini(clip_path, api_key)
+            else:
+                analysis = analyze_clip_with_openai(clip_path, api_key)
             save_analysis(clip['id'], analysis)
             print_analysis(clip['id'], analysis)
             
@@ -398,13 +597,42 @@ def main():
         except json.JSONDecodeError as e:
             log.error(f"    ERROR JSON: {e}")
             errors += 1
+            continue
         except Exception as e:
-            log.error(f"    ERROR: {e}")
+            error_msg = str(e)[:200]
+            log.error(f"    ERROR: {error_msg}")
             errors += 1
+            
+            if 'RESOURCE_EXHAUSTED' in str(e) or '429' in str(e):
+                log.warning(f"")
+                log.warning(f"    Gemini no disponible (rate limit o billing).")
+                
+                if model_choice == 'gemini':
+                    try:
+                        resp = input("    Quieres cambiar a OpenAI GPT-4o? (s/n): ").strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        resp = 'n'
+                    
+                    if resp == 's':
+                        openai_key = os.getenv('OPENAI_API_KEY')
+                        if not openai_key:
+                            log.error("    OPENAI_API_KEY no encontrada en .env. Abortando.")
+                            break
+                        model_choice = 'openai'
+                        api_key = openai_key
+                        cost_per_clip = 0.035
+                        log.info(f"    Cambiando a GPT-4o. Continuando...")
+                        continue
+                    else:
+                        log.info(f"    OK. Abortando.")
+                        break
+                else:
+                    continue
+            continue
         
-        # Small delay between clips (API courtesy)
+        # Delay between clips (Gemini rate limit: ~15 RPM with billing)
         if i < len(clips) - 1:
-            time.sleep(1)
+            time.sleep(5)
     
     # Summary
     log.info(f"")
@@ -414,7 +642,7 @@ def main():
     log.info(f"   Exitosos:     {success}/{len(clips)}")
     log.info(f"   Errores:      {errors}")
     log.info(f"   Tiempo total: {total_time:.1f}s ({total_time/max(success,1):.1f}s promedio)")
-    log.info(f"   Costo aprox:  ~${success * 0.001:.4f}")
+    log.info(f"   Costo aprox:  ~${success * cost_per_clip:.4f}")
     log.info(f"{'='*55}")
     
     if success > 0:
