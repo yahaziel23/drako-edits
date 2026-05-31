@@ -166,13 +166,17 @@ def classify_single_meme(client, image_path, model='gpt-4o'):
     
     content = response.choices[0].message.content.strip()
     
-    # Limpiar posibles markdown fences
-    if content.startswith('```'):
-        content = content.split('\n', 1)[1] if '\n' in content else content[3:]
-    if content.endswith('```'):
-        content = content[:-3]
-    if content.startswith('json'):
-        content = content[4:]
+    # Limpiar posibles markdown fences (robusto)
+    import re
+    fence_match = re.search(r'```(?:json)?\s*\n?(\{.*\})\s*\n?```', content, re.DOTALL)
+    if fence_match:
+        content = fence_match.group(1).strip()
+    else:
+        # Fallback: buscar el primer { y ultimo }
+        first_brace = content.find('{')
+        last_brace = content.rfind('}')
+        if first_brace != -1 and last_brace != -1:
+            content = content[first_brace:last_brace + 1]
     content = content.strip()
     
     result = json.loads(content)
