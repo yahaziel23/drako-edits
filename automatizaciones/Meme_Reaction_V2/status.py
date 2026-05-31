@@ -239,20 +239,25 @@ def display_status(detailed=False):
     # ---- NEXT STEPS (automatic suggestions) ----
     print(f"")
     print(f"   SIGUIENTE PASO SUGERIDO:")
+    suggestions = []
+    # Priority: downstream actions first (unblock the pipeline)
+    if counts.get('match_review', 0) > 0:
+        suggestions.append(f"     python catalogo_matches.py  ({counts['match_review']} matches por revisar)")
+    if counts.get('por_generar', 0) > 0:
+        suggestions.append(f"     python 7_generate_video.py  ({counts['por_generar']} listos)")
+    if counts.get('pendiente_match', 0) > 0:
+        suggestions.append(f"     python 4_match_clip.py  ({counts['pendiente_match']} por matchear)")
+    if clips['pending_categorize'] > 0:
+        suggestions.append(f"     python 3b_categorizar_clips.py  ({clips['pending_categorize']} clips)")
+    if counts.get('listo_clasificar', 0) > 0:
+        suggestions.append(f"     python 3_classify_meme.py  ({counts['listo_clasificar']} memes)")
+    if counts.get('pendiente_review', 0) > 0:
+        suggestions.append(f"     python batch_review.py  ({counts['pendiente_review']} frames)")
     if counts.get('por_descargar', 0) > 0:
-        print(f"     python 2_download_memes.py")
-    elif counts.get('pendiente_review', 0) > 0:
-        print(f"     python batch_review.py")
-    elif counts.get('listo_clasificar', 0) > 0:
-        print(f"     python 3_classify_meme.py")
-    elif clips['pending_categorize'] > 0:
-        print(f"     python 3b_categorizar_clips.py")
-    elif counts.get('pendiente_match', 0) > 0:
-        print(f"     python 4_match_clip.py")
-    elif counts.get('match_review', 0) > 0:
-        print(f"     python catalogo_matches.py")
-    elif counts.get('por_generar', 0) > 0:
-        print(f"     python 7_generate_video.py")
+        suggestions.append(f"     python 2_download_memes.py  ({counts['por_descargar']} pendientes)")
+    if suggestions:
+        for s in suggestions[:3]:  # Top 3 priorities
+            print(s)
     else:
         print(f"     Todo al dia! Scrapea mas o descarga mas clips.")
     print(f"")
