@@ -211,6 +211,106 @@ def get_pending_clips(force=False, clip_id=None):
     return rows
 
 
+def repair_json(raw_text):
+    """Intenta reparar JSON malformado de Gemini.
+    
+    Maneja: markdown fences, unterminated strings, trailing commas,
+    missing commas, truncated responses.
+    """
+    import re
+    
+    text = raw_text.strip()
+    
+    # Remove markdown code fences
+    if text.startswith('```'):
+        text = text.split('\n', 1)[1] if '\n' in text else text[3:]
+    if text.endswith('```'):
+        text = text[:-3].strip()
+    if text.startswith('json'):
+        text = text[4:].strip()
+    
+    # Find the JSON object boundaries
+    first_brace = text.find('{')
+    last_brace = text.rfind('}')
+    
+    if first_brace == -1 or last_brace == -1:
+        raise ValueError("No JSON object found in response")
+    
+    text = text[first_brace:last_brace + 1]
+    
+    # Try parsing as-is first
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    
+    # Fix 1: Remove trailing commas before } or ]
+    text = re.sub(r',\s*([}\]])', r'\1', text)
+    
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    
+    # Fix 2: Fix unterminated strings (find last valid structure)
+    # Try progressively shorter substrings ending with }
+    for i in range(len(text) - 1, 0, -1):
+        if text[i] == '}':
+            candidate = text[:i + 1]
+            # Balance braces
+            if candidate.count('{') == candidate.count('}'):
+                try:
+                    return json.loads(candidate)
+                except json.JSONDecodeError:
+                    # Try fixing trailing commas in this candidate
+                    candidate = re.sub(r',\s*([}\]])', r'\1', candidate)
+                    try:
+                        return json.loads(candidate)
+                    except json.JSONDecodeError:
+                        continue
+    
+    # Fix 3: Try to close unclosed strings and objects
+    # Count unclosed quotes
+    in_string = False
+    escaped = False
+    fixed = []
+    for ch in text:
+        if escaped:
+            fixed.append(ch)
+            escaped = False
+            continue
+        if ch == '\\':
+            escaped = True
+            fixed.append(ch)
+            continue
+        if ch == '"' and not escaped:
+            in_string = not in_string
+        fixed.append(ch)
+    
+    # If still in string, close it
+    if in_string:
+        fixed.append('"')
+    
+    fixed_text = ''.join(fixed)
+    
+    # Balance braces
+    open_braces = fixed_text.count('{') - fixed_text.count('}')
+    open_brackets = fixed_text.count('[') - fixed_text.count(']')
+    fixed_text += ']' * max(0, open_brackets)
+    fixed_text += '}' * max(0, open_braces)
+    
+    # Remove trailing commas again
+    fixed_text = re.sub(r',\s*([}\]])', r'\1', fixed_text)
+    
+    try:
+        return json.loads(fixed_text)
+    except json.JSONDecodeError:
+        pass
+    
+    # Last resort: raise original error
+    raise ValueError(f"Could not repair JSON: {raw_text[:200]}...")
+
+
 def extract_frames(clip_path, num_frames=5):
     """Extrae N frames equidistantes del video como JPG base64."""
     import base64
@@ -375,13 +475,28 @@ def analyze_clip_with_gemini(clip_path, api_key):
             
             raw_text = response.text.strip()
             
-            # Clean markdown fences
-            if raw_text.startswith('```'):
-                raw_text = raw_text.split('\n', 1)[1]
-                if raw_text.endswith('```'):
-                    raw_text = raw_text[:-3].strip()
-            
-            result = json.loads(raw_text)
+            try:
+                result = repair_json(raw_text)
+            except (json.JSONDecodeError, ValueError):
+                # Retry with lower temperature on JSON failure
+                if attempt < max_retries - 1:
+                    log.warning(f"    JSON malformado. Reintentando con temp=0.1 ({attempt+1}/{max_retries})...")
+                    time.sleep(2)
+                    try:
+                        response = client.models.generate_content(
+                            model=GEMINI_MODEL,
+                            contents=[video_file, prompt],
+                            config=types.GenerateContentConfig(
+                                temperature=0.1,
+                                max_output_tokens=2000,
+                            )
+                        )
+                        raw_text = response.text.strip()
+                        result = repair_json(raw_text)
+                    except Exception:
+                        continue  # Go to next attempt in the outer loop
+                else:
+                    raise json.JSONDecodeError("Failed after repair attempts", raw_text[:100], 0)
             
             # Cleanup uploaded file
             try:
