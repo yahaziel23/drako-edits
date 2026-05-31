@@ -106,6 +106,18 @@ def get_classified_memes(min_conf=None, max_conf=None, categoria=None, version=N
             'classified_at': row['classified_at'] or '',
         })
     
+    # Fetch saved idea picks
+    try:
+        pick_rows = db.execute(
+            "SELECT shortcode, user_said FROM user_feedback WHERE step = 'idea_pick'"
+        ).fetchall()
+        pick_map = {r['shortcode']: int(r['user_said']) for r in pick_rows}
+        for m in memes:
+            m['saved_pick'] = pick_map.get(m['shortcode'], None)
+    except Exception:
+        for m in memes:
+            m['saved_pick'] = None
+
     return memes
 
 
@@ -128,7 +140,8 @@ def generate_html(memes):
         # Ideas as list
         ideas_html = ''
         for idx, idea in enumerate(m['ideas_video'], 1):
-            ideas_html += '<li class="idea-item" data-sc="' + sc + '" data-idx="' + str(idx) + '" onclick="pickIdea(\'' + sc + '\',' + str(idx) + ')">' + str(idx) + '. ' + idea + '</li>'
+            picked_class = ' picked' if m.get('saved_pick') == idx else ''
+            ideas_html += '<li class="idea-item' + picked_class + '" data-sc="' + sc + '" data-idx="' + str(idx) + '" onclick="pickIdea(\'' + sc + '\',' + str(idx) + ')">' + str(idx) + '. ' + idea + '</li>'
         
         # Status badge
         valid_badge = '<span class="badge ok">VALIDO</span>' if m['valido'] else '<span class="badge bad">INVALIDO</span>'
@@ -240,7 +253,14 @@ def generate_html(memes):
     # === JAVASCRIPT (clean block) ===
     # === JAVASCRIPT ===
     html_parts.append('<script>')
-    html_parts.append('var D={};var notes={};var picks={};')
+    # Pre-populate picks from saved data
+    picks_init = '{'
+    picks_parts = []
+    for m in memes:
+        if m.get('saved_pick'):
+            picks_parts.append('"' + m['shortcode'] + '":' + str(m['saved_pick']))
+    picks_init += ','.join(picks_parts) + '}'
+    html_parts.append('var D={};var notes={};var picks=' + picks_init + ';')
     html_parts.append('function markOk(sc){D[sc]="ok";document.getElementById("c-"+sc).className="card marked-ok";upd();}')
     html_parts.append('function markReclassify(sc){D[sc]="reclassify";document.getElementById("c-"+sc).className="card marked-reclassify";upd();}')
     html_parts.append('function markReject(sc){D[sc]="reject";document.getElementById("c-"+sc).className="card marked-reject";upd();}')
@@ -329,10 +349,11 @@ def apply_results(results_path=None):
     # Guardar idea picks (idea favorita seleccionada por el usuario)
     idea_picks = data.get('idea_picks', {})
     for shortcode, idx in idea_picks.items():
-        db.execute(
-            "UPDATE clasificaciones SET ideas_video = json_set(COALESCE(ideas_video,'[]'), '$.picked', ?) WHERE shortcode = ?",
-            (int(idx), shortcode)
-        )
+        db.execute("DELETE FROM user_feedback WHERE shortcode = ? AND step = 'idea_pick'", (shortcode,))
+        db.execute("""
+            INSERT INTO user_feedback (shortcode, step, user_said, decision)
+            VALUES (?, 'idea_pick', ?, 'picked')
+        """, (shortcode, str(idx)))
     picks_count = len(idea_picks)
 
     # Guardar feedback

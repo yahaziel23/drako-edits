@@ -52,12 +52,23 @@ def get_all_data(version=None, only_feedback=False, only_rejected=False):
     query += " ORDER BY c.confianza ASC"
     classifications = db.execute(query, params).fetchall()
     
+    # Picks (idea favorita)
+    pick_map = {}
+    try:
+        pick_rows = db.execute(
+            "SELECT shortcode, user_said FROM user_feedback WHERE step = 'idea_pick'"
+        ).fetchall()
+        pick_map = {r['shortcode']: int(r['user_said']) for r in pick_rows}
+    except Exception:
+        pass
+
     # Feedback
     feedback_map = {}
     try:
         feedback_rows = db.execute("""
             SELECT shortcode, step, user_said, created_at
             FROM user_feedback
+            WHERE step != 'idea_pick'
             ORDER BY created_at
         """).fetchall()
         for row in feedback_rows:
@@ -90,6 +101,7 @@ def get_all_data(version=None, only_feedback=False, only_rejected=False):
         results.append({
             'shortcode': sc,
             'profile': row['source_profile'],
+            'saved_pick': pick_map.get(sc, None),
             'type': row['source_type'],
             'likes': row['likes'],
             'status': row['status'],
@@ -146,7 +158,8 @@ def format_report(results):
         # Ideas de video
         lines.append("    Ideas video:")
         for idx, idea in enumerate(r['ideas_video'], 1):
-            lines.append(f"      {idx}. {idea}")
+            pick_marker = " <<<< FAVORITA" if r.get('saved_pick') == idx else ""
+            lines.append(f"      {idx}. {idea}{pick_marker}")
         
         # Feedback del usuario
         if r['feedback']:
