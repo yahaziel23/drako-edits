@@ -342,7 +342,19 @@ def main():
 
     # Inicializar DB y obtener pendientes
     init_db()
-    pending = get_memes_by_status('por_descargar', limit=max_por_sesion)
+    
+    # Asegurar columna download_attempts existe (para retry logic)
+    db = get_db()
+    try:
+        db.execute("ALTER TABLE memes ADD COLUMN download_attempts INTEGER DEFAULT 0")
+        db.commit()
+    except Exception:
+        pass  # ya existe
+    
+    pending = db.execute(
+        "SELECT * FROM memes WHERE status = 'por_descargar' AND COALESCE(download_attempts, 0) < 3 LIMIT ?",
+        (max_por_sesion,)
+    ).fetchall()
 
     if not pending:
         log.info("No hay memes por descargar. Todo al día.")
@@ -383,6 +395,20 @@ def main():
         
         stats[result] = stats.get(result, 0) + 1
         limiter.log_request()
+
+        # Incrementar intentos en error y rechazar si >= 3
+        if result == 'error':
+            db.execute(
+                "UPDATE memes SET download_attempts = COALESCE(download_attempts, 0) + 1 WHERE shortcode = ?",
+                (shortcode,)
+            )
+            attempts = db.execute(
+                "SELECT download_attempts FROM memes WHERE shortcode = ?", (shortcode,)
+            ).fetchone()
+            if attempts and attempts['download_attempts'] >= 3:
+                update_meme_status(shortcode, 'rechazado')
+                log.warning(f"    -> 3 intentos fallidos, marcado como rechazado")
+            db.commit()
 
         if result in ('foto', 'frame'):
             track_item('processed')
