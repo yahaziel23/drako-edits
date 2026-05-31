@@ -146,6 +146,7 @@ def generate_html(memes):
             '<button class="btn-ok" onclick="markOk(\'' + sc + '\')">OK</button>'
             '<button class="btn-re" onclick="markReclassify(\'' + sc + '\')">RECLASIFICAR</button>'
             '<button class="btn-no" onclick="markReject(\'' + sc + '\')">RECHAZAR</button>'
+            '<button class="btn-ni" onclick="markNewIdeas(\'' + sc + '\')">5 NUEVAS</button>'
             '</div>'
             '</div>'
             '<div class="card-body">'
@@ -235,35 +236,86 @@ def generate_html(memes):
     html_parts.append('<div class="grid">' + cards_html + '</div>')
     html_parts.append('<div class="zo" id="zo" onclick="this.classList.remove(\'active\')">')
     html_parts.append('<img id="zi" src=""></div>')
-    html_parts.append('<script>')
-    html_parts.append('var D={};var notes={};var picks={};')
-    html_parts.append('function markOk(sc){D[sc]="ok";document.getElementById("c-"+sc).className="card marked-ok";upd();}')
-    html_parts.append('function markReclassify(sc){D[sc]="reclassify";document.getElementById("c-"+sc).className="card marked-reclassify";upd();}')
-    html_parts.append('function markReject(sc){D[sc]="reject";document.getElementById("c-"+sc).className="card marked-reject";upd();}')
-    html_parts.append('function zoomIn(src){document.getElementById("zi").src=src;document.getElementById("zo").classList.add("active");}')
-    html_parts.append('function upd(){')
-    html_parts.append('var ok=0,re=0,rj=0;for(var k in D){if(D[k]==="ok")ok++;if(D[k]==="reclassify")re++;if(D[k]==="reject")rj++;}')
-    html_parts.append('document.getElementById("sok").textContent="OK: "+ok;')
-    html_parts.append('document.getElementById("sre").textContent="Reclasificar: "+re;')
-    html_parts.append('document.getElementById("srj").textContent="Rechazar: "+rj;}')
-    pick_js = (
-        "function pickIdea(sc,idx){"
-        "picks[sc]=idx;"
-        'var card=document.getElementById("c-"+sc);'
-        'card.querySelectorAll(".idea-item").forEach(function(li){li.classList.remove("picked")});'
-        'card.querySelector("[data-idx=\""+idx+"\"]").classList.add("picked");}'
-    )
-    html_parts.append(pick_js)
-    html_parts.append('function saveResults(){')
-    html_parts.append('document.querySelectorAll(".notes").forEach(function(ta){if(ta.value.trim())notes[ta.dataset.sc]=ta.value.trim();});')
-    html_parts.append('var t=Object.keys(D).length;')
-    html_parts.append('var data={timestamp:new Date().toISOString(),total_decisions:t,decisions:D,feedback:notes,idea_picks:picks};')
-    html_parts.append('var blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});')
-    html_parts.append('var url=URL.createObjectURL(blob);var a=document.createElement("a");')
-    html_parts.append('a.href=url;a.download="view_results.json";a.click();URL.revokeObjectURL(url);')
-    html_parts.append('alert("Guardado: "+t+" decisiones, "+Object.keys(notes).length+" notas, "+Object.keys(picks).length+" ideas seleccionadas.\\n\\nCorre: python view_clasificados.py --apply");}')
-    html_parts.append('console.log("ViewClasificados OK: "+document.querySelectorAll(".card").length+" cards");')
-    html_parts.append('</script></body></html>')
+    # === JAVASCRIPT (clean block) ===
+    js_code = """
+<script>
+var D = {};
+var notes = {};
+var picks = {};
+
+function markOk(sc) {
+    D[sc] = "ok";
+    document.getElementById("c-" + sc).className = "card marked-ok";
+    upd();
+}
+function markReclassify(sc) {
+    D[sc] = "reclassify";
+    document.getElementById("c-" + sc).className = "card marked-reclassify";
+    upd();
+}
+function markReject(sc) {
+    D[sc] = "reject";
+    document.getElementById("c-" + sc).className = "card marked-reject";
+    upd();
+}
+function markNewIdeas(sc) {
+    D[sc] = "new_ideas";
+    document.getElementById("c-" + sc).className = "card marked-reclassify";
+    upd();
+}
+function pickIdea(sc, idx) {
+    picks[sc] = idx;
+    var card = document.getElementById("c-" + sc);
+    var items = card.querySelectorAll(".idea-item");
+    for (var i = 0; i < items.length; i++) {
+        items[i].classList.remove("picked");
+    }
+    var sel = card.querySelector('[data-idx="' + idx + '"]');
+    if (sel) sel.classList.add("picked");
+}
+function zoomIn(src) {
+    document.getElementById("zi").src = src;
+    document.getElementById("zo").classList.add("active");
+}
+function upd() {
+    var ok = 0, re = 0, rj = 0, ni = 0;
+    for (var k in D) {
+        if (D[k] === "ok") ok++;
+        if (D[k] === "reclassify") re++;
+        if (D[k] === "reject") rj++;
+        if (D[k] === "new_ideas") ni++;
+    }
+    document.getElementById("sok").textContent = "OK: " + ok;
+    document.getElementById("sre").textContent = "Reclasificar: " + re;
+    document.getElementById("srj").textContent = "Rechazar: " + rj;
+}
+function saveResults() {
+    document.querySelectorAll(".notes").forEach(function(ta) {
+        if (ta.value.trim()) notes[ta.dataset.sc] = ta.value.trim();
+    });
+    var t = Object.keys(D).length;
+    var data = {
+        timestamp: new Date().toISOString(),
+        total_decisions: t,
+        decisions: D,
+        feedback: notes,
+        idea_picks: picks
+    };
+    var blob = new Blob([JSON.stringify(data, null, 2)], {type: "application/json"});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = "view_results.json";
+    a.click();
+    URL.revokeObjectURL(url);
+    var msg = "Guardado: " + t + " decisiones, " + Object.keys(notes).length + " notas, " + Object.keys(picks).length + " ideas seleccionadas.";
+    msg += "\n\nCorre: python view_clasificados.py --apply";
+    alert(msg);
+}
+console.log("ViewClasificados OK: " + document.querySelectorAll(".card").length + " cards");
+</script></body></html>
+"""
+    html_parts.append(js_code)
     
     return '\n'.join(html_parts)
 
@@ -302,6 +354,7 @@ def apply_results(results_path=None):
     ok_count = 0
     reclassify_count = 0
     reject_count = 0
+    new_ideas_count = 0
     feedback_count = 0
     
     for shortcode, decision in decisions.items():
@@ -318,6 +371,14 @@ def apply_results(results_path=None):
             # Mover a descartado
             update_meme_status(shortcode, 'descartado_ia')
             reject_count += 1
+        elif decision == 'new_ideas':
+            # Marcar para regenerar solo ideas (mantiene tags/descripcion)
+            db.execute(
+                "UPDATE clasificaciones SET ideas_video = '[]' WHERE shortcode = ?",
+                (shortcode,)
+            )
+            update_meme_status(shortcode, 'listo_clasificar')
+            new_ideas_count += 1
     
     # Guardar idea picks (idea favorita seleccionada por el usuario)
     idea_picks = data.get('idea_picks', {})
@@ -351,11 +412,13 @@ def apply_results(results_path=None):
     log.info(f"   OK (confirmados):        {ok_count}")
     log.info(f"   Ideas seleccionadas:     {picks_count}")
     log.info(f"   Reclasificar:            {reclassify_count}")
+    log.info(f"   Nuevas ideas:            {new_ideas_count}")
     log.info(f"   Rechazados:              {reject_count}")
     log.info(f"   Notas guardadas:         {feedback_count}")
     log.info("=" * 50)
-    if reclassify_count > 0:
-        log.info(f"   {reclassify_count} memes listos para re-clasificar.")
+    if reclassify_count > 0 or new_ideas_count > 0:
+        total_re = reclassify_count + new_ideas_count
+        log.info(f"   {total_re} memes listos para re-clasificar.")
         log.info(f"   Corre: python 3_classify_meme.py")
     log.info("")
     
