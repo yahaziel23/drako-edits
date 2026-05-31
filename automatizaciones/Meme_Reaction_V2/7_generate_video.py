@@ -193,53 +193,51 @@ def generate_video(shortcode, meme_image, clip_path, caption, caption_size='M', 
     
     font_size = CAPTION_SIZES.get(caption_size, CAPTION_SIZES['M'])
     
-    # Escape caption for ffmpeg drawtext
-    caption_escaped = ''
-    if caption:
-        # ffmpeg drawtext escaping: replace special chars
-        caption_escaped = caption.replace("'", "\u2019")  # curly quote
-        caption_escaped = caption_escaped.replace(':', '\\:')
-        caption_escaped = caption_escaped.replace('%', '%%')
+    # Caption will be written to file for proper UTF-8 (handled below)
     
     # Build filter_complex
+    # Inputs: [0:v] = meme image (looped), [1:v] = clip video
+    # color= generates background INSIDE the filter
     filters = []
     
-    # Input 0: black background
-    # Input 1: meme image
-    # Input 2: clip video
+    # Scale meme: fit within 1080 x meme_h, center with black padding
+    filters.append(f'[0:v]scale={WIDTH}:{meme_h}:force_original_aspect_ratio=decrease,pad={WIDTH}:{meme_h}:(ow-iw)/2:(oh-ih)/2:black[meme]')
     
-    # Scale meme: fit within 1080 x meme_h, center vertically
-    filters.append(f'[1:v]scale={WIDTH}:{meme_h}:force_original_aspect_ratio=decrease,pad={WIDTH}:{meme_h}:(ow-iw)/2:(oh-ih)/2:black[meme]')
+    # Scale clip: fit within 1080 x clip_h, center with black padding
+    filters.append(f'[1:v]scale={WIDTH}:{clip_h}:force_original_aspect_ratio=decrease,pad={WIDTH}:{clip_h}:(ow-iw)/2:(oh-ih)/2:black[clip]')
     
-    # Scale clip: fit within 1080 x clip_h, center
-    filters.append(f'[2:v]scale={WIDTH}:{clip_h}:force_original_aspect_ratio=decrease,pad={WIDTH}:{clip_h}:(ow-iw)/2:(oh-ih)/2:black[clip]')
-    
-    # Create black background with duration
+    # Create black background canvas (same duration as clip)
     filters.append(f'color=black:s={WIDTH}x{HEIGHT}:d={duration}:r={FPS}[bg]')
     
-    # Overlay meme on top
+    # Overlay meme at top
     filters.append('[bg][meme]overlay=0:0:shortest=1[v1]')
     
     # Overlay clip at bottom
     filters.append(f'[v1][clip]overlay=0:{clip_y}:shortest=1[v2]')
     
     # Add caption text if provided
-    if caption_escaped:
-        # Caption position: centered, in the gap between meme and clip
-        caption_y = meme_h - int(font_size * 0.8)  # slightly above the gap
+    # Use textfile for proper UTF-8 support on Windows
+    caption_file = None
+    if caption:
+        caption_y_pos = meme_h - int(font_size * 0.8)
         
-        # White text with black outline (TikTok style)
-        # Escape colon in fontfile path for ffmpeg filter syntax
-        font_path = CAPTION_FONT_FILE.replace(':', '\\:')
+        # Write caption to temp file (avoids encoding issues on Windows)
+        caption_file = TEMP_DIR / f"caption_{shortcode}.txt"
+        caption_file.write_text(caption, encoding='utf-8')
+        
+        # fontfile path: use forward slashes, escape colon for filter syntax
+        font_path = CAPTION_FONT_FILE.replace('\\', '/').replace(':', '\\:')
+        caption_file_path = str(caption_file).replace('\\', '/').replace(':', '\\:')
+        
         drawtext = (
-            f"drawtext=text='{caption_escaped}'"
+            f"drawtext=textfile='{caption_file_path}'"
             f":fontfile='{font_path}'"
             f":fontsize={font_size}"
             f":fontcolor=white"
             f":borderw={STROKE_WIDTH}"
             f":bordercolor=black"
             f":x=(w-text_w)/2"
-            f":y={caption_y}"
+            f":y={caption_y_pos}"
         )
         filters.append(f'[v2]{drawtext}[vout]')
         final_video = '[vout]'
@@ -251,8 +249,8 @@ def generate_video(shortcode, meme_image, clip_path, caption, caption_size='M', 
     # Build ffmpeg command
     cmd = [
         'ffmpeg', '-y',
-        '-loop', '1', '-i', str(meme_image),       # Input 1: meme image (looped)
-        '-i', str(clip_path),                       # Input 2: clip video
+        '-loop', '1', '-i', str(meme_image),       # Input 0: meme image (looped)
+        '-i', str(clip_path),                       # Input 1: clip video
         '-filter_complex', filter_complex,
         '-map', final_video,                         # Video output
         '-map', '1:a?',                              # Audio from clip (if exists)
@@ -270,6 +268,10 @@ def generate_video(shortcode, meme_image, clip_path, caption, caption_size='M', 
     log.info(f"    Generando video ({duration:.1f}s)...")
     
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    
+    # Cleanup caption temp file
+    if caption_file and caption_file.exists():
+        caption_file.unlink()
     
     if result.returncode != 0:
         # Show last meaningful error (skip version info)
