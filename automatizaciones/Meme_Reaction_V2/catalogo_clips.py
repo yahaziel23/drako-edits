@@ -412,7 +412,7 @@ def generate_html(clips, audios):
     html_parts.append('document.querySelectorAll(".preview").forEach(function(v){v.addEventListener("timeupdate",function(){var id=this.closest(".card").dataset.id;var pct=(this.currentTime/this.duration)*100;var bar=document.getElementById("prog-"+id);if(bar)bar.style.width=pct+"%";});});')
     html_parts.append('function saveResults(){')
     html_parts.append('document.querySelectorAll(".notes").forEach(function(ta){if(ta.value.trim())notes[ta.dataset.id]=ta.value.trim();});')
-    html_parts.append('document.querySelectorAll(".trim-start").forEach(function(inp){var id=inp.dataset.id;var s=parseFloat(inp.value)||0;var eInp=document.querySelector(".trim-end[data-id=\""+id+"\"]");var e=parseFloat(eInp.value)||0;if(s>0||e<parseFloat(eInp.max)){trims[id]={start:s,end:e};}});')
+    html_parts.append('document.querySelectorAll(".trim-start").forEach(function(inp){var id=inp.dataset.id;var s=parseFloat(inp.value)||0;var eInp=document.querySelector(\'.trim-end[data-id="\'+id+\'"]\');var e=parseFloat(eInp.value)||0;if(s>0||e<parseFloat(eInp.max)){trims[id]={start:s,end:e};}});')
     html_parts.append('document.querySelectorAll(".audio-select").forEach(function(sel){if(sel.value)audios_map[sel.dataset.id]=sel.value;});')
     html_parts.append('var t=Object.keys(D).length;')
     html_parts.append('var data={timestamp:new Date().toISOString(),total_decisions:t,decisions:D,feedback:notes,trims:trims,audio_assignments:audios_map};')
