@@ -543,12 +543,18 @@ def execute_uploads():
         except Exception:
             pass
         
-        # Convert scheduled_at to ISO 8601 UTC
+        # Convert local time (Mexico City) to UTC for YouTube API
         publish_at = None
         if row['scheduled_at']:
             try:
+                from zoneinfo import ZoneInfo
+                local_tz = ZoneInfo('America/Mexico_City')
+                utc_tz = ZoneInfo('UTC')
+                # Parse as naive local time, attach Mexico_City timezone, convert to UTC
                 dt = datetime.fromisoformat(row['scheduled_at'])
-                publish_at = dt.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+                dt_local = dt.replace(tzinfo=local_tz)
+                dt_utc = dt_local.astimezone(utc_tz)
+                publish_at = dt_utc.strftime('%Y-%m-%dT%H:%M:%S.000Z')
             except Exception:
                 pass
         
