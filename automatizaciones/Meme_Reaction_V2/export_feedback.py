@@ -56,9 +56,9 @@ def get_all_data(version=None, only_feedback=False, only_rejected=False):
     feedback_map = {}
     try:
         feedback_rows = db.execute("""
-            SELECT shortcode, step, feedback_text, timestamp
+            SELECT shortcode, step, user_said, created_at
             FROM user_feedback
-            ORDER BY timestamp
+            ORDER BY created_at
         """).fetchall()
         for row in feedback_rows:
             sc = row['shortcode']
@@ -66,8 +66,8 @@ def get_all_data(version=None, only_feedback=False, only_rejected=False):
                 feedback_map[sc] = []
             feedback_map[sc].append({
                 'step': row['step'],
-                'text': row['feedback_text'],
-                'timestamp': row['timestamp'],
+                'text': row['user_said'],
+                'timestamp': row['created_at'],
             })
     except Exception:
         pass  # tabla puede no existir aun
