@@ -322,9 +322,9 @@ def main():
     run_health_checks(checks=['config', 'db', 'dirs', 'cleanup'])
 
     # Parámetros
-    max_por_sesion = args.max or dl_cfg.get('max_por_sesion', 50)
+    max_por_sesion = args.max or dl_cfg.get('max_por_sesion', 99999)
     min_likes = args.min_likes if args.min_likes is not None else dl_cfg.get('min_likes', 5000)
-    delay_entre_posts = dl_cfg.get('delay_entre_posts', 5)
+    delay_entre_posts = dl_cfg.get('delay_entre_posts', 2)
     pausa_cada_n = dl_cfg.get('pausa_cada_n', 20)
     pausa_duracion = dl_cfg.get('pausa_duracion_s', 180)
     is_dry_run = args.dry_run or config.get('dry_run', False)
@@ -396,10 +396,7 @@ def main():
             jitter = random.uniform(0.5, 2.0)
             time.sleep(delay_entre_posts + jitter)
 
-        # Pausa larga cada N posts
-        if i > 0 and i % pausa_cada_n == 0 and i < len(pending):
-            log.info(f"  --- Pausa de {pausa_duracion}s (cada {pausa_cada_n} posts) ---")
-            time.sleep(pausa_duracion)
+        # Pausa larga removida (no hay riesgo de ban, solo rate limit por IP)
 
     # Cleanup temp
     if TEMP_DIR.exists():

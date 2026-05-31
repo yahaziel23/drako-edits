@@ -2,7 +2,6 @@
   "perfiles_target": [
     "elmello2023"
   ],
-
   "scraping": {
     "brave_path": "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
     "scroll_count_inicial": 20,
@@ -11,15 +10,11 @@
     "delay_entre_perfiles": 5,
     "skip_if_no_new_for_n_runs": 3
   },
-
   "descarga": {
     "min_likes": 5000,
-    "max_por_sesion": 50,
-    "delay_entre_posts": 5,
-    "pausa_cada_n": 20,
-    "pausa_duracion_s": 180
+    "max_por_sesion": 99999,
+    "delay_entre_posts": 2
   },
-
   "clasificacion": {
     "modelo": "gpt-4o",
     "max_tokens": 1800,
@@ -39,7 +34,6 @@
       "intellectual"
     ]
   },
-
   "match": {
     "modelo": "gpt-4o-mini",
     "auto_accept_threshold": 90,
@@ -47,18 +41,17 @@
     "max_por_sesion": 10,
     "max_tokens": 600
   },
-
   "video": {
     "width": 1080,
     "height": 1920,
     "fps": 30,
-    "meme_max_ratio": 0.70,
-    "clip_max_ratio": 0.40,
-    "clip_min_ratio": 0.30,
+    "meme_max_ratio": 0.7,
+    "clip_max_ratio": 0.4,
+    "clip_min_ratio": 0.3,
     "meme_border_ratio": 0.03,
     "black_bar_threshold": 15,
     "black_bar_min_rows": 8,
-    "max_crop_ratio": 0.30,
+    "max_crop_ratio": 0.3,
     "caption_sizes": {
       "S": 45,
       "M": 65,
@@ -67,13 +60,15 @@
     },
     "stroke_width": 4
   },
-
   "upload": {
-    "platforms": ["youtube", "tiktok", "instagram"],
+    "platforms": [
+      "youtube",
+      "tiktok",
+      "instagram"
+    ],
     "modelo_metadata": "gpt-4o-mini",
     "max_tokens_metadata": 400
   },
-
   "telegram": {
     "enabled": true,
     "bot_token": "ENV:TELEGRAM_BOT_TOKEN",
@@ -83,7 +78,6 @@
     "notificar_errores": true,
     "resumen_diario": false
   },
-
   "rate_limits": {
     "openai": {
       "max_requests_per_day": 500,
@@ -92,22 +86,20 @@
     },
     "instagram": {
       "max_requests_per_day": 200,
-      "warning_threshold": 0.7
+      "warning_threshold": 0.7,
+      "requests_dia": 99999
     }
   },
-
   "logging": {
     "level": "INFO",
     "file_rotation_mb": 5,
     "keep_logs_days": 30
   },
-
   "retry": {
     "max_attempts": 3,
     "backoff_factor": 2,
     "retry_on_bad_json": true,
     "lower_temp_on_retry": true
   },
-
   "dry_run": false
 }
