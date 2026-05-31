@@ -162,6 +162,7 @@ def classify_single_meme(client, image_path, model='gpt-4o'):
         ],
         max_tokens=1500,
         temperature=0.3,
+        response_format={"type": "json_object"},
     )
     
     content = response.choices[0].message.content.strip()
