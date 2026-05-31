@@ -338,11 +338,8 @@ def apply_results(results_path=None):
             update_meme_status(shortcode, 'descartado_ia')
             reject_count += 1
         elif decision == 'new_ideas':
-            # Marcar para regenerar solo ideas (mantiene tags/descripcion)
-            db.execute(
-                "UPDATE clasificaciones SET ideas_video = '[]' WHERE shortcode = ?",
-                (shortcode,)
-            )
+            # Borrar clasificacion para forzar re-clasificacion completa (evita cache hit)
+            db.execute("DELETE FROM clasificaciones WHERE shortcode = ?", (shortcode,))
             update_meme_status(shortcode, 'listo_clasificar')
             new_ideas_count += 1
     
