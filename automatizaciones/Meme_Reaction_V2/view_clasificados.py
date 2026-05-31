@@ -198,6 +198,7 @@ def generate_html(memes):
     html_parts.append('.btn-ok{background:#4CAF50;color:white}')
     html_parts.append('.btn-re{background:#ff9800;color:white}')
     html_parts.append('.btn-no{background:#f44336;color:white}')
+    html_parts.append('.btn-ni{background:#9c27b0;color:white}')
     html_parts.append('.card-body{padding:10px}')
     html_parts.append('.card-header{display:flex;align-items:center;gap:8px;margin-bottom:5px}')
     html_parts.append('.sc-code{font-family:monospace;font-size:0.75em;color:#aaa}')
@@ -237,85 +238,30 @@ def generate_html(memes):
     html_parts.append('<div class="zo" id="zo" onclick="this.classList.remove(\'active\')">')
     html_parts.append('<img id="zi" src=""></div>')
     # === JAVASCRIPT (clean block) ===
-    js_code = """
-<script>
-var D = {};
-var notes = {};
-var picks = {};
-
-function markOk(sc) {
-    D[sc] = "ok";
-    document.getElementById("c-" + sc).className = "card marked-ok";
-    upd();
-}
-function markReclassify(sc) {
-    D[sc] = "reclassify";
-    document.getElementById("c-" + sc).className = "card marked-reclassify";
-    upd();
-}
-function markReject(sc) {
-    D[sc] = "reject";
-    document.getElementById("c-" + sc).className = "card marked-reject";
-    upd();
-}
-function markNewIdeas(sc) {
-    D[sc] = "new_ideas";
-    document.getElementById("c-" + sc).className = "card marked-reclassify";
-    upd();
-}
-function pickIdea(sc, idx) {
-    picks[sc] = idx;
-    var card = document.getElementById("c-" + sc);
-    var items = card.querySelectorAll(".idea-item");
-    for (var i = 0; i < items.length; i++) {
-        items[i].classList.remove("picked");
-    }
-    var sel = card.querySelector('[data-idx="' + idx + '"]');
-    if (sel) sel.classList.add("picked");
-}
-function zoomIn(src) {
-    document.getElementById("zi").src = src;
-    document.getElementById("zo").classList.add("active");
-}
-function upd() {
-    var ok = 0, re = 0, rj = 0, ni = 0;
-    for (var k in D) {
-        if (D[k] === "ok") ok++;
-        if (D[k] === "reclassify") re++;
-        if (D[k] === "reject") rj++;
-        if (D[k] === "new_ideas") ni++;
-    }
-    document.getElementById("sok").textContent = "OK: " + ok;
-    document.getElementById("sre").textContent = "Reclasificar: " + re;
-    document.getElementById("srj").textContent = "Rechazar: " + rj;
-}
-function saveResults() {
-    document.querySelectorAll(".notes").forEach(function(ta) {
-        if (ta.value.trim()) notes[ta.dataset.sc] = ta.value.trim();
-    });
-    var t = Object.keys(D).length;
-    var data = {
-        timestamp: new Date().toISOString(),
-        total_decisions: t,
-        decisions: D,
-        feedback: notes,
-        idea_picks: picks
-    };
-    var blob = new Blob([JSON.stringify(data, null, 2)], {type: "application/json"});
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement("a");
-    a.href = url;
-    a.download = "view_results.json";
-    a.click();
-    URL.revokeObjectURL(url);
-    var msg = "Guardado: " + t + " decisiones, " + Object.keys(notes).length + " notas, " + Object.keys(picks).length + " ideas seleccionadas.";
-    msg += "\n\nCorre: python view_clasificados.py --apply";
-    alert(msg);
-}
-console.log("ViewClasificados OK: " + document.querySelectorAll(".card").length + " cards");
-</script></body></html>
-"""
-    html_parts.append(js_code)
+    # === JAVASCRIPT ===
+    html_parts.append('<script>')
+    html_parts.append('var D={};var notes={};var picks={};')
+    html_parts.append('function markOk(sc){D[sc]="ok";document.getElementById("c-"+sc).className="card marked-ok";upd();}')
+    html_parts.append('function markReclassify(sc){D[sc]="reclassify";document.getElementById("c-"+sc).className="card marked-reclassify";upd();}')
+    html_parts.append('function markReject(sc){D[sc]="reject";document.getElementById("c-"+sc).className="card marked-reject";upd();}')
+    html_parts.append('function markNewIdeas(sc){D[sc]="new_ideas";document.getElementById("c-"+sc).className="card marked-reclassify";upd();}')
+    html_parts.append('function pickIdea(sc,idx){picks[sc]=idx;var c=document.getElementById("c-"+sc);var items=c.querySelectorAll(".idea-item");for(var i=0;i<items.length;i++){items[i].classList.remove("picked");if(items[i].getAttribute("data-idx")==String(idx))items[i].classList.add("picked")}}')
+    html_parts.append('function zoomIn(src){document.getElementById("zi").src=src;document.getElementById("zo").classList.add("active");}')
+    html_parts.append('function upd(){')
+    html_parts.append('var ok=0,re=0,rj=0;for(var k in D){if(D[k]==="ok")ok++;if(D[k]==="reclassify")re++;if(D[k]==="reject")rj++;}')
+    html_parts.append('document.getElementById("sok").textContent="OK: "+ok;')
+    html_parts.append('document.getElementById("sre").textContent="Reclasificar: "+re;')
+    html_parts.append('document.getElementById("srj").textContent="Rechazar: "+rj;}')
+    html_parts.append('function saveResults(){')
+    html_parts.append('document.querySelectorAll(".notes").forEach(function(ta){if(ta.value.trim())notes[ta.dataset.sc]=ta.value.trim();});')
+    html_parts.append('var t=Object.keys(D).length;')
+    html_parts.append('var data={timestamp:new Date().toISOString(),total_decisions:t,decisions:D,feedback:notes,idea_picks:picks};')
+    html_parts.append('var blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});')
+    html_parts.append('var url=URL.createObjectURL(blob);var a=document.createElement("a");')
+    html_parts.append('a.href=url;a.download="view_results.json";a.click();URL.revokeObjectURL(url);')
+    html_parts.append('alert("Guardado: "+t+" decisiones, "+Object.keys(notes).length+" notas, "+Object.keys(picks).length+" ideas.\\n\\nCorre: python view_clasificados.py --apply");}')
+    html_parts.append('console.log("ViewClasificados OK: "+document.querySelectorAll(".card").length+" cards");')
+    html_parts.append('</script></body></html>')
     
     return '\n'.join(html_parts)
 
