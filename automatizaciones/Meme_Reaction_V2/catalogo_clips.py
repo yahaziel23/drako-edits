@@ -543,12 +543,6 @@ def start_local_server():
 
 def apply_results(results_path=None):
     """Aplica decisiones: aprobar/cambios/rechazar + trim + audio."""
-    # Ensure needs_crop column exists
-    try:
-        db.execute("ALTER TABLE clips ADD COLUMN needs_crop INTEGER DEFAULT 0")
-        db.commit()
-    except Exception:
-        pass
     log = get_logger()
     path = Path(results_path) if results_path else CATALOG_RESULTS
     downloads_path = Path.home() / "Downloads" / "catalogo_results.json"
@@ -567,6 +561,13 @@ def apply_results(results_path=None):
     audio_assignments = data.get('audio_assignments', {})
     feedback = data.get('feedback', {})
     db = get_db()
+    
+    # Ensure needs_crop column exists
+    try:
+        db.execute("ALTER TABLE clips ADD COLUMN needs_crop INTEGER DEFAULT 0")
+        db.commit()
+    except Exception:
+        pass
     
     ok_count = 0
     changes_count = 0
