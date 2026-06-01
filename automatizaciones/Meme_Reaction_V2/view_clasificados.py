@@ -55,7 +55,7 @@ def get_classified_memes(min_conf=None, max_conf=None, categoria=None, version=N
                c.tokens_used, c.classified_at
         FROM memes m
         JOIN clasificaciones c ON m.shortcode = c.shortcode
-        WHERE 1=1
+        WHERE m.status NOT IN ('subido','rechazado','descartado_ia')
     """
     params = []
     
