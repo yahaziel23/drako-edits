@@ -242,6 +242,19 @@ def generate_html():
     h.append('<div class="tip">Solo categoriza clips aprobados sin categorizar. Gemini Flash es gratuito.</div>')
     h.append('</div></div>')
     
+    # preprocess_clips
+    h.append('<div class="step">')
+    h.append('<div class="step-icon">&#9986;</div>')
+    h.append('<div class="step-body">')
+    h.append('<div class="step-name">Recortar Bordes Negros (Auto-crop)</div>')
+    h.append('<div class="step-desc">Detecta y elimina letterbox/pillarbox negro de clips marcados. Usa ffmpeg cropdetect para encontrar el contenido real y recorta. Solo procesa clips que TU marques con RECORTAR en el catalogo.</div>')
+    h.append('<div class="cmd-row"><div class="cmd">python preprocess_clips.py</div><button class="copy-btn" onclick="copyCmd(this)">Copiar</button></div>')
+    h.append('<div class="cmd-row"><div class="cmd">python preprocess_clips.py --preview</div><button class="copy-btn" onclick="copyCmd(this)">Copiar</button></div>')
+    h.append('<div class="cmd-row"><div class="cmd">python preprocess_clips.py --clip clip_ID</div><button class="copy-btn" onclick="copyCmd(this)">Copiar</button></div>')
+    h.append('<div class="flags"><span class="flag"><code>--preview</code> solo muestra que recortaria</span><span class="flag"><code>--clip ID</code> uno especifico</span><span class="flag"><code>--all</code> todos los marcados</span></div>')
+    h.append('<div class="tip">Flujo: catalogo_clips &#8594; marcar RECORTAR &#8594; --apply &#8594; preprocess_clips.py. Originales se guardan en clips/originals/.</div>')
+    h.append('</div></div>')
+    
     h.append('</div></div>')  # end phase 3
     
     # ========== PHASE 4: MATCH ==========
