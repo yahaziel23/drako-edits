@@ -562,12 +562,17 @@ def apply_results(results_path=None):
     feedback = data.get('feedback', {})
     db = get_db()
     
-    # Ensure needs_crop column exists
-    try:
-        db.execute("ALTER TABLE clips ADD COLUMN needs_crop INTEGER DEFAULT 0")
-        db.commit()
-    except Exception:
-        pass
+    # Ensure preprocess columns exist
+    for col_sql in [
+        "ALTER TABLE clips ADD COLUMN needs_crop INTEGER DEFAULT 0",
+        "ALTER TABLE clips ADD COLUMN preprocessed INTEGER DEFAULT 0",
+        "ALTER TABLE clips ADD COLUMN crop_applied TEXT",
+    ]:
+        try:
+            db.execute(col_sql)
+            db.commit()
+        except Exception:
+            pass
     
     ok_count = 0
     changes_count = 0
