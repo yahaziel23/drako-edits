@@ -284,6 +284,7 @@ def generate_html(clips, audios):
             '<button class="btn-ok" onclick="markOk(\'' + cid + '\')">APROBAR</button>'
             '<button class="btn-ch" onclick="markChanges(\'' + cid + '\')">CAMBIOS</button>'
             '<button class="btn-no" onclick="markReject(\'' + cid + '\')">RECHAZAR</button>'
+            '<button class="btn-rp" onclick="markReprocess(\'' + cid + '\')">RECORTAR</button>'
             '</div>'
             '<div class="dur ' + dur_class + '">' + dur_str + ' | ' + orient + ' | ' + res_str + '</div>'
             '</div>'
@@ -348,6 +349,8 @@ def generate_html(clips, audios):
     html_parts.append('.btn-ok{background:#4CAF50;color:white}')
     html_parts.append('.btn-ch{background:#ff9800;color:white}')
     html_parts.append('.btn-no{background:#f44336;color:white}')
+    html_parts.append('.btn-rp{background:#9C27B0;color:white}')
+    html_parts.append('.card.marked-reprocess{border-color:#9C27B0;opacity:0.7}')
     html_parts.append('.btn-listen{margin-top:4px;padding:4px 10px;border:none;border-radius:4px;background:#2196F3;color:white;cursor:pointer;font-size:0.75em}')
     html_parts.append('.dur{position:absolute;bottom:5px;right:5px;background:rgba(0,0,0,0.7);padding:2px 6px;border-radius:4px;font-size:0.7em}')
     html_parts.append('.card-body{padding:10px}')
@@ -418,7 +421,7 @@ def generate_html(clips, audios):
     html_parts.append('<span>Audios: ' + str(len(audios)) + '</span>')
     html_parts.append('<span id="sok">OK: 0</span>')
     html_parts.append('<span id="sch">Cambios: 0</span>')
-    html_parts.append('<span id="srj">Rechazar: 0</span>')
+    html_parts.append('<span id="srj">Rechazar: 0</span><span id="srp">Recortar: 0</span>')
     html_parts.append('</div></div>')
     
     # Filters
@@ -465,11 +468,13 @@ def generate_html(clips, audios):
     html_parts.append('function markOk(id){D[id]="ok";document.getElementById("c-"+id).className="card marked-ok";upd();}')
     html_parts.append('function markChanges(id){D[id]="changes";document.getElementById("c-"+id).className="card marked-changes";upd();}')
     html_parts.append('function markReject(id){D[id]="reject";document.getElementById("c-"+id).className="card marked-reject";upd();}')
+    html_parts.append('function markReprocess(id){D[id]="reprocess";document.getElementById("c-"+id).className="card marked-reprocess";upd();}')
     html_parts.append('function upd(){')
-    html_parts.append('var ok=0,ch=0,rj=0;for(var k in D){if(D[k]==="ok")ok++;if(D[k]==="changes")ch++;if(D[k]==="reject")rj++;}')
+    html_parts.append('var ok=0,ch=0,rj=0,rp=0;for(var k in D){if(D[k]==="ok")ok++;if(D[k]==="changes")ch++;if(D[k]==="reject")rj++;if(D[k]==="reprocess")rp++;}')
     html_parts.append('document.getElementById("sok").textContent="OK: "+ok;')
     html_parts.append('document.getElementById("sch").textContent="Cambios: "+ch;')
-    html_parts.append('document.getElementById("srj").textContent="Rechazar: "+rj;}')
+    html_parts.append('document.getElementById("srj").textContent="Rechazar: "+rj;')
+    html_parts.append('document.getElementById("srp").textContent="Recortar: "+rp;}')
     # Toggle play with timestamp update
     html_parts.append('function togglePlay(v){if(v.paused){v.play()}else{v.pause()}}')
     html_parts.append('document.querySelectorAll(".preview").forEach(function(v){')
@@ -560,6 +565,7 @@ def apply_results(results_path=None):
     ok_count = 0
     changes_count = 0
     reject_count = 0
+    reprocess_count = 0
     trim_count = 0
     audio_count = 0
     
@@ -584,6 +590,22 @@ def apply_results(results_path=None):
             db.execute("DELETE FROM matches WHERE clip_id = ?", (clip_id,))
             db.execute("DELETE FROM clips WHERE id = ?", (clip_id,))
             reject_count += 1
+        elif decision == 'reprocess':
+            # Resetear preprocessed para que preprocess_clips.py lo vuelva a procesar
+            # Si hay backup en originals/, restaurarlo primero
+            clip_row = db.execute("SELECT filename FROM clips WHERE id = ?", (clip_id,)).fetchone()
+            if clip_row:
+                originals_dir = CLIPS_DIR / "originals"
+                backup = originals_dir / clip_row['filename']
+                current = CLIPS_DIR / clip_row['filename']
+                if backup.exists():
+                    # Restaurar original
+                    if current.exists():
+                        current.unlink()
+                    import shutil
+                    shutil.copy2(backup, current)
+            db.execute("UPDATE clips SET preprocessed = 0, crop_applied = NULL WHERE id = ?", (clip_id,))
+            reprocess_count += 1
     
     # 2. Aplicar trims (solo para clips con decision 'changes')
     for clip_id, trim_data in trims.items():
