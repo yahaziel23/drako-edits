@@ -14,10 +14,15 @@ Flujo:
   5. Actualiza dimensiones en SQLite
 
 Uso:
-    python preprocess_clips.py                # Procesa clips sin preprocesar
-    python preprocess_clips.py --all          # Re-procesa todos (incluso ya procesados)
-    python preprocess_clips.py --clip clip_id # Solo un clip especifico
+    python preprocess_clips.py                # Procesa clips marcados con RECORTAR
+    python preprocess_clips.py --all          # Re-procesa todos los marcados
+    python preprocess_clips.py --clip clip_id # Solo un clip especifico (sin necesidad de marcar)
     python preprocess_clips.py --preview      # Solo muestra que recortaria, sin aplicar
+
+Flujo:
+    1. python catalogo_clips.py     → marca clips con boton RECORTAR
+    2. python catalogo_clips.py --apply  → guarda en DB (needs_crop=1)
+    3. python preprocess_clips.py   → procesa SOLO los marcados
 """
 
 import sys
@@ -232,6 +237,7 @@ def ensure_db_columns():
     new_cols = [
         ("preprocessed", "INTEGER DEFAULT 0"),
         ("crop_applied", "TEXT"),
+        ("needs_crop", "INTEGER DEFAULT 0"),
     ]
     for col_name, col_type in new_cols:
         try:
@@ -264,13 +270,14 @@ def main():
     if args.clip:
         rows = db.execute("SELECT id, filename FROM clips WHERE id = ?", (args.clip,)).fetchall()
     elif args.all:
-        rows = db.execute("SELECT id, filename FROM clips WHERE approved = 1").fetchall()
+        rows = db.execute("SELECT id, filename FROM clips WHERE approved = 1 AND needs_crop = 1").fetchall()
     else:
-        # Only unprocessed clips
-        rows = db.execute("SELECT id, filename FROM clips WHERE approved = 1 AND (preprocessed = 0 OR preprocessed IS NULL)").fetchall()
+        # Solo clips marcados con RECORTAR en catalogo_clips.py
+        rows = db.execute("SELECT id, filename FROM clips WHERE needs_crop = 1").fetchall()
     
     if not rows:
-        log.info("   No hay clips para procesar.")
+        log.info("   No hay clips marcados para recortar.")
+        log.info("   Marca clips con RECORTAR en: python catalogo_clips.py")
         return
     
     log.info(f"   Clips a procesar: {len(rows)}")
@@ -295,9 +302,9 @@ def main():
             errors += 1
         elif result['action'] == 'skip':
             skipped += 1
-            # Mark as preprocessed (no crop needed)
+            # Mark as processed (no crop needed), clear the flag
             if not args.preview:
-                db.execute("UPDATE clips SET preprocessed = 1 WHERE id = ?", (clip_id,))
+                db.execute("UPDATE clips SET preprocessed = 1, needs_crop = 0 WHERE id = ?", (clip_id,))
                 db.commit()
         elif result['action'] in ('cropped', 'preview'):
             cropped += 1

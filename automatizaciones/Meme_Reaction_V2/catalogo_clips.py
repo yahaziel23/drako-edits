@@ -543,6 +543,12 @@ def start_local_server():
 
 def apply_results(results_path=None):
     """Aplica decisiones: aprobar/cambios/rechazar + trim + audio."""
+    # Ensure needs_crop column exists
+    try:
+        db.execute("ALTER TABLE clips ADD COLUMN needs_crop INTEGER DEFAULT 0")
+        db.commit()
+    except Exception:
+        pass
     log = get_logger()
     path = Path(results_path) if results_path else CATALOG_RESULTS
     downloads_path = Path.home() / "Downloads" / "catalogo_results.json"
@@ -591,20 +597,20 @@ def apply_results(results_path=None):
             db.execute("DELETE FROM clips WHERE id = ?", (clip_id,))
             reject_count += 1
         elif decision == 'reprocess':
-            # Resetear preprocessed para que preprocess_clips.py lo vuelva a procesar
-            # Si hay backup en originals/, restaurarlo primero
+            # Marcar para recorte en preprocess_clips.py
+            # Si hay backup en originals/, restaurar original primero
             clip_row = db.execute("SELECT filename FROM clips WHERE id = ?", (clip_id,)).fetchone()
             if clip_row:
                 originals_dir = CLIPS_DIR / "originals"
                 backup = originals_dir / clip_row['filename']
                 current = CLIPS_DIR / clip_row['filename']
                 if backup.exists():
-                    # Restaurar original
+                    # Restaurar original para re-procesar desde cero
                     if current.exists():
                         current.unlink()
                     import shutil
                     shutil.copy2(backup, current)
-            db.execute("UPDATE clips SET preprocessed = 0, crop_applied = NULL WHERE id = ?", (clip_id,))
+            db.execute("UPDATE clips SET needs_crop = 1, preprocessed = 0, crop_applied = NULL WHERE id = ?", (clip_id,))
             reprocess_count += 1
     
     # 2. Aplicar trims (solo para clips con decision 'changes')
