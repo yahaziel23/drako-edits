@@ -59,7 +59,7 @@ META_HTML = SCRIPT_DIR / "upload_scheduler.html"
 SERVER_PORT = 8770
 
 # YouTube API scopes
-YOUTUBE_SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
+YOUTUBE_SCOPES = ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly']
 
 
 # ============================================================
