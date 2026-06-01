@@ -161,6 +161,7 @@ def generate_html(memes):
             '<button class="btn-re" onclick="markReclassify(\'' + sc + '\')">RECLASIFICAR</button>'
             '<button class="btn-no" onclick="markReject(\'' + sc + '\')">RECHAZAR</button>'
             '<button class="btn-ni" onclick="markNewIdeas(\'' + sc + '\')">5 NUEVAS</button>'
+            '<button class="btn-dl" onclick="markRedownload(\'' + sc + '\')">REDESCARGAR</button>'
             '</div>'
             '</div>'
             '<div class="card-body">'
@@ -213,6 +214,8 @@ def generate_html(memes):
     html_parts.append('.btn-re{background:#ff9800;color:white}')
     html_parts.append('.btn-no{background:#f44336;color:white}')
     html_parts.append('.btn-ni{background:#9c27b0;color:white}')
+    html_parts.append('.btn-dl{background:#2196F3;color:white}')
+    html_parts.append('.card.marked-redownload{border-color:#2196F3;opacity:0.6}')
     html_parts.append('.card-body{padding:10px}')
     html_parts.append('.card-header{display:flex;align-items:center;gap:8px;margin-bottom:5px}')
     html_parts.append('.sc-code{font-family:monospace;font-size:0.75em;color:#aaa}')
@@ -244,7 +247,7 @@ def generate_html(memes):
     html_parts.append('<div class="stats"><span>Total: ' + total + '</span>')
     html_parts.append('<span id="sok">OK: 0</span>')
     html_parts.append('<span id="sre">Reclasificar: 0</span>')
-    html_parts.append('<span id="srj">Rechazar: 0</span></div></div>')
+    html_parts.append('<span id="srj">Rechazar: 0</span><span id="sdl">Redescargar: 0</span></div></div>')
     html_parts.append('<div class="tb">')
     html_parts.append('<button class="sv" onclick="saveResults()">GUARDAR DECISIONES</button>')
     html_parts.append('</div>')
@@ -272,13 +275,15 @@ def generate_html(memes):
     html_parts.append('function markReclassify(sc){D[sc]="reclassify";document.getElementById("c-"+sc).className="card marked-reclassify";upd();}')
     html_parts.append('function markReject(sc){D[sc]="reject";document.getElementById("c-"+sc).className="card marked-reject";upd();}')
     html_parts.append('function markNewIdeas(sc){D[sc]="new_ideas";document.getElementById("c-"+sc).className="card marked-reclassify";upd();}')
+    html_parts.append('function markRedownload(sc){D[sc]="redownload";document.getElementById("c-"+sc).className="card marked-redownload";upd();}')
     html_parts.append('function pickIdea(sc,idx){picks[sc]=idx;var c=document.getElementById("c-"+sc);var items=c.querySelectorAll(".idea-item");for(var i=0;i<items.length;i++){items[i].classList.remove("picked");if(items[i].getAttribute("data-idx")==String(idx))items[i].classList.add("picked")}}')
     html_parts.append('function zoomIn(src){document.getElementById("zi").src=src;document.getElementById("zo").classList.add("active");}')
     html_parts.append('function upd(){')
-    html_parts.append('var ok=0,re=0,rj=0;for(var k in D){if(D[k]==="ok")ok++;if(D[k]==="reclassify")re++;if(D[k]==="reject")rj++;}')
+    html_parts.append('var ok=0,re=0,rj=0,dl=0;for(var k in D){if(D[k]==="ok")ok++;if(D[k]==="reclassify")re++;if(D[k]==="reject")rj++;if(D[k]==="redownload")dl++;}')
     html_parts.append('document.getElementById("sok").textContent="OK: "+ok;')
     html_parts.append('document.getElementById("sre").textContent="Reclasificar: "+re;')
-    html_parts.append('document.getElementById("srj").textContent="Rechazar: "+rj;}')
+    html_parts.append('document.getElementById("srj").textContent="Rechazar: "+rj;')
+    html_parts.append('document.getElementById("sdl").textContent="Redescargar: "+dl;}')
     html_parts.append('function saveResults(){')
     html_parts.append('document.querySelectorAll(".notes").forEach(function(ta){if(ta.value.trim())notes[ta.dataset.sc]=ta.value.trim();});')
     html_parts.append('var t=Object.keys(D).length;')
@@ -328,6 +333,7 @@ def apply_results(results_path=None):
     reclassify_count = 0
     reject_count = 0
     new_ideas_count = 0
+    redownload_count = 0
     feedback_count = 0
     
     for shortcode, decision in decisions.items():
@@ -349,6 +355,16 @@ def apply_results(results_path=None):
             db.execute("DELETE FROM clasificaciones WHERE shortcode = ?", (shortcode,))
             update_meme_status(shortcode, 'listo_clasificar')
             new_ideas_count += 1
+        elif decision == 'redownload':
+            # Borrar clasificacion + imagen + resetear a por_descargar
+            db.execute("DELETE FROM clasificaciones WHERE shortcode = ?", (shortcode,))
+            # Borrar imagen actual (se volvera a descargar)
+            for ext in ['.jpg', '.png', '.webp']:
+                img_path = Path(SCRIPT_DIR) / 'memes_descargados' / (shortcode + ext)
+                if img_path.exists():
+                    img_path.unlink()
+            update_meme_status(shortcode, 'por_descargar')
+            redownload_count += 1
     
     # Guardar idea picks (idea favorita seleccionada por el usuario)
     idea_picks = data.get('idea_picks', {})
@@ -385,12 +401,16 @@ def apply_results(results_path=None):
     log.info(f"   Reclasificar:            {reclassify_count}")
     log.info(f"   Nuevas ideas:            {new_ideas_count}")
     log.info(f"   Rechazados:              {reject_count}")
+    log.info(f"   Redescargar:             {redownload_count}")
     log.info(f"   Notas guardadas:         {feedback_count}")
     log.info("=" * 50)
     if reclassify_count > 0 or new_ideas_count > 0:
         total_re = reclassify_count + new_ideas_count
         log.info(f"   {total_re} memes listos para re-clasificar.")
         log.info(f"   Corre: python 3_classify_meme.py")
+    if redownload_count > 0:
+        log.info(f"   {redownload_count} memes para redescargar.")
+        log.info(f"   Corre: python 2_download_memes.py")
     log.info("")
     
     if path.exists():
