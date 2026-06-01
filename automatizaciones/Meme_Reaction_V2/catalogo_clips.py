@@ -580,7 +580,9 @@ def apply_results(results_path=None):
                 src = CLIPS_DIR / clip_row['filename']
                 if src.exists():
                     src.rename(rejected_dir / clip_row['filename'])
-                db.execute("DELETE FROM clips WHERE id = ?", (clip_id,))
+                # Borrar dependencias primero (matches que usan este clip)
+            db.execute("DELETE FROM matches WHERE clip_id = ?", (clip_id,))
+            db.execute("DELETE FROM clips WHERE id = ?", (clip_id,))
             reject_count += 1
     
     # 2. Aplicar trims (solo para clips con decision 'changes')
